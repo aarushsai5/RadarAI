@@ -7,13 +7,13 @@ import ScanningAnimation from './components/ScanningAnimation';
 import ResultsSection from './components/ResultsSection';
 import Footer from './components/Footer';
 
-// ─── Image compression: max 1280px, JPEG 92% (preserve diagnostic detail) ──────
+// ─── Image compression: max 1024px, JPEG 85% ──────────────────────────────────
 function compressImage(file) {
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const MAX = 1280;
+      const MAX = 1024;
       let { width, height } = img;
       if (width > MAX || height > MAX) {
         if (width > height) { height = Math.round((height * MAX) / width); width = MAX; }
@@ -24,7 +24,7 @@ function compressImage(file) {
       canvas.height = height;
       canvas.getContext('2d').drawImage(img, 0, 0, width, height);
       URL.revokeObjectURL(url);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       resolve({ base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
     };
     img.src = url;
@@ -167,7 +167,7 @@ async function callGroq(base64, mimeType, groqKey, prompt) {
         },
       ],
       temperature: 0,
-      max_tokens: 2500,
+      max_tokens: 1800,
     }),
   });
 
@@ -211,7 +211,7 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
         },
       ],
       temperature: 0,
-      max_tokens: 2500,
+      max_tokens: 1800,
     }),
   });
 
