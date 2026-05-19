@@ -196,7 +196,7 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${orKey}`,
       'HTTP-Referer': 'http://localhost:5173',
-      'X-Title': 'RadarAI',
+      'X-Title': 'ClarivueAI',
     },
     body: JSON.stringify({
       model,
@@ -236,12 +236,12 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
   // 1. Try Groq (fastest, completely free)
   if (groqKey) {
     try {
-      console.log('[RadarAI] Trying Groq (Llama 4 Scout)...');
+      console.log('[ClarivueAI] Trying Groq (Llama 4 Scout)...');
       const result = await callGroq(base64, mimeType, groqKey, prompt);
-      console.log('[RadarAI] ✅ Groq success');
+      console.log('[ClarivueAI] ✅ Groq success');
       return result;
     } catch (err) {
-      console.warn('[RadarAI] Groq failed:', err.message);
+      console.warn('[ClarivueAI] Groq failed:', err.message);
     }
   }
 
@@ -249,12 +249,12 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
   if (orKey) {
     for (const model of OR_FREE_MODELS) {
       try {
-        console.log(`[RadarAI] Trying OpenRouter: ${model}`);
+        console.log(`[ClarivueAI] Trying OpenRouter: ${model}`);
         const result = await callOpenRouter(model, base64, mimeType, orKey, prompt);
-        console.log(`[RadarAI] ✅ OpenRouter success: ${model}`);
+        console.log(`[ClarivueAI] ✅ OpenRouter success: ${model}`);
         return result;
       } catch (err) {
-        console.warn(`[RadarAI] ❌ ${model}:`, err.message);
+        console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
         if (err.skip) continue;
         throw err;
       }
@@ -315,7 +315,7 @@ function App() {
       const parsed = await analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt);
       setResult(parsed);
     } catch (err) {
-      console.error('[RadarAI] Fatal error:', err);
+      console.error('[ClarivueAI] Fatal error:', err);
       setError(err.message || 'Analysis failed. Please try again.');
     } finally {
       setIsAnalyzing(false);

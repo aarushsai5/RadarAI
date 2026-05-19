@@ -48,7 +48,7 @@ export default function Header() {
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
             letterSpacing: '0.02em',
-          }}>RadarAI</span>
+          }}>ClarivueAI</span>
         </div>
 
         {/* Badge */}

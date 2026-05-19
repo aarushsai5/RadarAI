@@ -16,7 +16,15 @@ export default function Footer() {
           color: 'var(--color-text-primary)',
           fontWeight: 600,
         }}>
-          X-Ray · CT Scan · MRI Analysis · RadarAI © 2026
+          X-Ray · CT Scan · MRI Analysis · ClarivueAI © 2026
+        </p>
+        <p style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.55rem',
+          color: 'var(--color-text-secondary)',
+          letterSpacing: '0.08em',
+        }}>
+          Designed and managed by Aarush Sai (aarushsai7677@gmail.com)
         </p>
       </div>
     </footer>
