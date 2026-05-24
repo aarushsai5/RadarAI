@@ -5,15 +5,18 @@ import UploadZone from './components/UploadZone';
 import PreviewCard from './components/PreviewCard';
 import ScanningAnimation from './components/ScanningAnimation';
 import ResultsSection from './components/ResultsSection';
+import ComparisonUploadZone from './components/ComparisonUploadZone';
+import ComparisonResultsSection from './components/ComparisonResultsSection';
+import HistoryPanel from './components/HistoryPanel';
 import Footer from './components/Footer';
 
-// ─── Image compression: max 1024px, JPEG 85% ──────────────────────────────────
+// ─── Medical-grade image preprocessing ─────────────────────────────────────────
 function compressImage(file) {
   return new Promise((resolve) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const MAX = 1024;
+      const MAX = 1536; // Higher res for medical detail
       let { width, height } = img;
       if (width > MAX || height > MAX) {
         if (width > height) { height = Math.round((height * MAX) / width); width = MAX; }
@@ -22,9 +25,31 @@ function compressImage(file) {
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Medical contrast enhancement (lightweight CLAHE-like)
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const d = imageData.data;
+      let min = 255, max = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+        if (lum < min) min = lum;
+        if (lum > max) max = lum;
+      }
+      const range = max - min || 1;
+      if (range < 200) { // Only enhance low-contrast images
+        const scale = 245 / range;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i]   = Math.min(255, Math.max(0, (d[i] - min) * scale + 5));
+          d[i+1] = Math.min(255, Math.max(0, (d[i+1] - min) * scale + 5));
+          d[i+2] = Math.min(255, Math.max(0, (d[i+2] - min) * scale + 5));
+        }
+        ctx.putImageData(imageData, 0, 0);
+      }
+
       URL.revokeObjectURL(url);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
       resolve({ base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
     };
     img.src = url;
@@ -167,7 +192,7 @@ async function callGroq(base64, mimeType, groqKey, prompt) {
         },
       ],
       temperature: 0,
-      max_tokens: 1800,
+      max_tokens: 4000,
     }),
   });
 
@@ -177,9 +202,14 @@ async function callGroq(base64, mimeType, groqKey, prompt) {
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error('Empty Groq response');
 
+  // Better JSON extraction in case model wraps in markdown
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No JSON in Groq response');
-  return JSON.parse(jsonMatch[0]);
+  if (!jsonMatch) throw new Error('No valid JSON found in Groq response');
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    throw new Error('Failed to parse Groq JSON response');
+  }
 }
 
 // ─── OpenRouter: free fallback models ─────────────────────────────────────────
@@ -211,7 +241,7 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
         },
       ],
       temperature: 0,
-      max_tokens: 1800,
+      max_tokens: 4000,
     }),
   });
 
@@ -227,8 +257,12 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
   if (!text) throw Object.assign(new Error('Empty response'), { skip: true });
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw Object.assign(new Error('No JSON in response'), { skip: true });
-  return JSON.parse(jsonMatch[0]);
+  if (!jsonMatch) throw Object.assign(new Error('No valid JSON found in response'), { skip: true });
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    throw Object.assign(new Error('Failed to parse OpenRouter JSON response'), { skip: true });
+  }
 }
 
 // ─── Master analysis: Groq first, OpenRouter free models as fallback ───────────
@@ -264,8 +298,130 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
   throw new Error('All providers failed. Check your API keys and try again.');
 }
 
+// ─── Comparison Prompt ──────────────────────────────────────────────────────────
+const COMPARISON_PROMPT = `You are an expert radiologist AI. You are given two medical scan images of the same patient — Scan 1 is older and Scan 2 is more recent. Compare both scans and return ONLY a valid JSON object — no markdown, no backticks, no extra text:
+
+{
+  "scan_type": "e.g. Chest X-Ray, CT Brain, MRI Spine",
+  "scan1_findings": "Detailed findings from the older scan",
+  "scan2_findings": "Detailed findings from the recent scan",
+  "comparison": "Detailed paragraph comparing both scans — what has changed, improved, worsened, or remained stable",
+  "progression": "Improved or Stable or Worsened",
+  "severity_now": "None or Low or Medium or High",
+  "recommendations": ["3 to 5 recommendations based on progression"],
+  "next_steps": "What patient should do next based on comparison",
+  "confidence": "Low or Medium or High",
+  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
+}`;
+
+// ─── Comparison API calls (two images in one request) ──────────────────────────
+async function callGroqComparison(b64_1, mime1, b64_2, mime2, groqKey) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
+    body: JSON.stringify({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [
+        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
+        { role: 'user', content: [
+          { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
+          { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
+          { type: 'text', text: COMPARISON_PROMPT },
+        ]},
+      ],
+      temperature: 0, max_tokens: 4000,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || `Groq HTTP ${response.status}`);
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Empty Groq response');
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error('No valid JSON in Groq response');
+  try { return JSON.parse(jsonMatch[0]); } catch (e) { throw new Error('Failed to parse Groq comparison JSON'); }
+}
+
+async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey) {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${orKey}`, 'HTTP-Referer': 'http://localhost:5173', 'X-Title': 'ClarivueAI' },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
+        { role: 'user', content: [
+          { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
+          { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
+          { type: 'text', text: COMPARISON_PROMPT },
+        ]},
+      ],
+      temperature: 0, max_tokens: 4000,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const msg = data?.error?.message || `HTTP ${response.status}`;
+    if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
+      throw Object.assign(new Error(msg), { skip: true });
+    throw new Error(msg);
+  }
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw Object.assign(new Error('Empty response'), { skip: true });
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw Object.assign(new Error('No valid JSON in response'), { skip: true });
+  try { return JSON.parse(jsonMatch[0]); } catch (e) { throw Object.assign(new Error('Failed to parse comparison JSON'), { skip: true }); }
+}
+
+async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey, orKey) {
+  if (groqKey) {
+    try {
+      console.log('[ClarivueAI] Comparison: Trying Groq...');
+      const result = await callGroqComparison(b64_1, mime1, b64_2, mime2, groqKey);
+      console.log('[ClarivueAI] ✅ Groq comparison success');
+      return result;
+    } catch (err) { console.warn('[ClarivueAI] Groq comparison failed:', err.message); }
+  }
+  if (orKey) {
+    for (const model of OR_FREE_MODELS) {
+      try {
+        console.log(`[ClarivueAI] Comparison: Trying OpenRouter: ${model}`);
+        const result = await callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey);
+        console.log(`[ClarivueAI] ✅ OpenRouter comparison success: ${model}`);
+        return result;
+      } catch (err) {
+        console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
+        if (err.skip) continue;
+        throw err;
+      }
+    }
+  }
+  throw new Error('All providers failed. Check your API keys and try again.');
+}
+
+// ─── History helpers ────────────────────────────────────────────────────────────
+function saveToHistory(result, scanType, isComparison = false) {
+  try {
+    const history = JSON.parse(localStorage.getItem('clarivue_history') || '[]');
+    const entry = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      timestamp: new Date().toISOString(),
+      scanType,
+      severity: isComparison ? result.severity_now : result.severity,
+      conditions: isComparison
+        ? [result.progression || 'Comparison']
+        : (result.conditions_detected || []),
+      isComparison,
+      result,
+    };
+    history.unshift(entry);
+    if (history.length > 10) history.pop();
+    localStorage.setItem('clarivue_history', JSON.stringify(history));
+  } catch (e) { console.warn('[ClarivueAI] History save failed:', e); }
+}
+
 // ─── App ───────────────────────────────────────────────────────────────────────
 function App() {
+  // ── Existing single-scan state ──
   const [scanType, setScanType] = useState('xray');
   const [file, setFile] = useState(null);
   const [imageUrl, setImageUrl] = useState(null);
@@ -274,6 +430,17 @@ function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
+  // ── Feature 1: Comparison Mode ──
+  const [compareMode, setCompareMode] = useState(false);
+  const [file2, setFile2] = useState(null);
+  const [imageUrl2, setImageUrl2] = useState(null);
+  const [isDragging2, setIsDragging2] = useState(false);
+  const [comparisonResult, setComparisonResult] = useState(null);
+
+  // ── Feature 2: History ──
+  const [showHistory, setShowHistory] = useState(false);
+
+  // ── Existing handlers (unchanged) ──
   const handleFileSelect = useCallback((selectedFile) => {
     if (!selectedFile) return;
     if (!['image/jpeg', 'image/png'].includes(selectedFile.type)) {
@@ -314,6 +481,7 @@ function App() {
       const prompt = getPromptForScanType(scanType);
       const parsed = await analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt);
       setResult(parsed);
+      saveToHistory(parsed, scanType, false);
     } catch (err) {
       console.error('[ClarivueAI] Fatal error:', err);
       setError(err.message || 'Analysis failed. Please try again.');
@@ -321,6 +489,91 @@ function App() {
       setIsAnalyzing(false);
     }
   }, [file, scanType]);
+
+  // ── Comparison handlers ──
+  const handleFileSelect2 = useCallback((selectedFile) => {
+    if (!selectedFile) return;
+    if (!['image/jpeg', 'image/png'].includes(selectedFile.type)) {
+      setError('Please upload a JPEG or PNG image.');
+      return;
+    }
+    setError(null);
+    setFile2(selectedFile);
+    setImageUrl2(URL.createObjectURL(selectedFile));
+  }, []);
+
+  const handleCompare = useCallback(async () => {
+    if (!file || !file2) return;
+    setIsAnalyzing(true);
+    setError(null);
+    setComparisonResult(null);
+
+    try {
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+      const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+      if (!groqKey && !orKey) throw new Error('No API key configured. Set VITE_GROQ_API_KEY in .env');
+
+      const img1 = await compressImage(file);
+      const img2 = await compressImage(file2);
+      const parsed = await analyzeComparisonWithFallback(
+        img1.base64, img1.mimeType, img2.base64, img2.mimeType, groqKey, orKey
+      );
+      setComparisonResult(parsed);
+      saveToHistory(parsed, scanType, true);
+    } catch (err) {
+      console.error('[ClarivueAI] Comparison error:', err);
+      setError(err.message || 'Comparison failed. Please try again.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [file, file2, scanType]);
+
+  const handleResetComparison = useCallback(() => {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    if (imageUrl2) URL.revokeObjectURL(imageUrl2);
+    setFile(null); setFile2(null);
+    setImageUrl(null); setImageUrl2(null);
+    setComparisonResult(null);
+    setResult(null);
+    setError(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [imageUrl, imageUrl2]);
+
+  // ── Mode toggle handler ──
+  const handleModeSwitch = useCallback((mode) => {
+    if (mode === compareMode) return;
+    // Clean up when switching modes
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    if (imageUrl2) URL.revokeObjectURL(imageUrl2);
+    setFile(null); setFile2(null);
+    setImageUrl(null); setImageUrl2(null);
+    setResult(null); setComparisonResult(null);
+    setError(null);
+    setCompareMode(mode);
+  }, [compareMode, imageUrl, imageUrl2]);
+
+  // ── History handlers ──
+  const handleViewHistory = useCallback((item) => {
+    if (item.isComparison) {
+      setCompareMode(true);
+      setComparisonResult(item.result);
+      setResult(null);
+    } else {
+      setCompareMode(false);
+      setResult(item.result);
+      setComparisonResult(null);
+    }
+    // Clear file states since we're viewing from history
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+    if (imageUrl2) URL.revokeObjectURL(imageUrl2);
+    setFile(null); setFile2(null);
+    setImageUrl(null); setImageUrl2(null);
+    setError(null);
+    setShowHistory(false);
+  }, [imageUrl, imageUrl2]);
+
+  // Determine if we're in an active state (has files or results)
+  const hasNoContent = !file && !result && !comparisonResult;
 
   return (
     <div style={{ minHeight: '100vh', width: '100%', position: 'relative' }}>
@@ -346,7 +599,7 @@ function App() {
       </div>
 
       <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <Header />
+        <Header showHistory={showHistory} onToggleHistory={() => setShowHistory(h => !h)} />
 
         <main style={{ flex: 1, width: '100%' }}>
           <Hero />
@@ -365,17 +618,73 @@ function App() {
             </div>
           )}
 
-          {!file && !result && (
-            <UploadZone onFileSelect={handleFileSelect} isDragging={isDragging} setIsDragging={setIsDragging} scanType={scanType} setScanType={setScanType} />
+          {/* ── Mode Toggle (shown when no active analysis) ── */}
+          {hasNoContent && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
+              <div className="mode-toggle">
+                <button
+                  className={`mode-toggle-btn${!compareMode ? ' active' : ''}`}
+                  onClick={() => handleModeSwitch(false)}
+                >📄 Single Scan</button>
+                <button
+                  className={`mode-toggle-btn${compareMode ? ' active' : ''}`}
+                  onClick={() => handleModeSwitch(true)}
+                >🔄 Compare Scans</button>
+              </div>
+            </div>
           )}
 
-          {file && !isAnalyzing && !result && (
-            <PreviewCard file={file} imageUrl={imageUrl} onAnalyze={handleAnalyze} onRemove={handleRemove} isAnalyzing={isAnalyzing} scanType={scanType} />
+          {/* ── History Panel ── */}
+          {showHistory && (
+            <div style={{ width: '100%', padding: '0 1.5rem' }}>
+              <HistoryPanel
+                onViewResult={handleViewHistory}
+                onClose={() => setShowHistory(false)}
+              />
+            </div>
           )}
 
-          {isAnalyzing && <ScanningAnimation scanType={scanType} />}
+          {/* ── SINGLE SCAN MODE (existing behavior, untouched) ── */}
+          {!compareMode && (
+            <>
+              {!file && !result && (
+                <UploadZone onFileSelect={handleFileSelect} isDragging={isDragging} setIsDragging={setIsDragging} scanType={scanType} setScanType={setScanType} />
+              )}
 
-          {result && <ResultsSection result={result} onReset={handleReset} scanType={scanType} />}
+              {file && !isAnalyzing && !result && (
+                <PreviewCard file={file} imageUrl={imageUrl} onAnalyze={handleAnalyze} onRemove={handleRemove} isAnalyzing={isAnalyzing} scanType={scanType} />
+              )}
+
+              {isAnalyzing && <ScanningAnimation scanType={scanType} />}
+
+              {result && <ResultsSection result={result} onReset={handleReset} scanType={scanType} />}
+            </>
+          )}
+
+          {/* ── COMPARISON MODE ── */}
+          {compareMode && (
+            <>
+              {!comparisonResult && !isAnalyzing && (
+                <ComparisonUploadZone
+                  onFileSelect1={handleFileSelect}
+                  onFileSelect2={handleFileSelect2}
+                  file1={file} file2={file2}
+                  imageUrl1={imageUrl} imageUrl2={imageUrl2}
+                  isDragging1={isDragging} setIsDragging1={setIsDragging}
+                  isDragging2={isDragging2} setIsDragging2={setIsDragging2}
+                  onCompare={handleCompare}
+                  isAnalyzing={isAnalyzing}
+                  scanType={scanType}
+                />
+              )}
+
+              {isAnalyzing && <ScanningAnimation scanType={scanType} />}
+
+              {comparisonResult && (
+                <ComparisonResultsSection result={comparisonResult} onReset={handleResetComparison} />
+              )}
+            </>
+          )}
         </main>
 
         <Footer />
@@ -385,3 +694,4 @@ function App() {
 }
 
 export default App;
+

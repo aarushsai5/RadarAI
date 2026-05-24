@@ -1,4 +1,5 @@
 import RiskMeter, { calcRiskScore } from './RiskMeter';
+import UrgencyAlert from './UrgencyAlert';
 
 function SectionLabel({ children }) {
   return (
@@ -13,6 +14,15 @@ function SectionLabel({ children }) {
 function handleDownloadPDF(result, scanType) {
   const scanLabel = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : 'X-Ray';
   const riskScore = calcRiskScore(result.severity, result.confidence);
+  const sev = result.severity?.toLowerCase();
+
+  let urgencyHTML = '';
+  if (sev === 'high') {
+    urgencyHTML = `<div style="background:#ff3d71;color:#fff;padding:12px 16px;border-radius:6px;margin-bottom:20px;text-align:center;font-weight:bold;">⚠️ URGENT — This scan indicates a high severity condition. Please seek immediate medical attention.</div>`;
+  } else if (sev === 'medium') {
+    urgencyHTML = `<div style="border:2px solid #d97800;color:#d97800;padding:12px 16px;border-radius:6px;margin-bottom:20px;text-align:center;font-weight:bold;">⚠️ This scan indicates a moderate condition. Please consult a doctor at the earliest.</div>`;
+  }
+
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -52,6 +62,7 @@ function handleDownloadPDF(result, scanType) {
         <h1>ClarivueAI</h1>
         <div class="subtitle">AI-Powered Medical Scan Analysis Report</div>
       </div>
+      ${urgencyHTML}
       <div class="meta">
         <div class="meta-item">
           <div class="meta-label">Date</div>
@@ -121,6 +132,9 @@ export default function ResultsSection({ result, onReset, scanType }) {
   return (
     <div style={{ width: '100%', padding: '0 1.5rem 4rem' }} className="animate-fade-in-up">
       <div style={{ maxWidth: '56rem', marginLeft: 'auto', marginRight: 'auto' }}>
+
+        {/* ── Urgency Alert ── */}
+        <UrgencyAlert severity={result.severity} />
 
         {/* ── Layman Summary Banner ── */}
         {result.layman_summary && (() => {

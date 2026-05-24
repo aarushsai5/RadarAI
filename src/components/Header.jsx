@@ -1,4 +1,4 @@
-export default function Header() {
+export default function Header({ showHistory, onToggleHistory }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 100,
@@ -51,30 +51,59 @@ export default function Header() {
           }}>ClarivueAI</span>
         </div>
 
-        {/* Badge */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '0.5rem',
-          background: 'rgba(2, 128, 144, 0.08)',
-          border: '1px solid rgba(2, 128, 144, 0.25)',
-          borderRadius: '20px',
-          padding: '5px 14px',
-          backdropFilter: 'blur(8px)',
-        }}>
+        {/* Right side: History button + Badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* History Toggle Button */}
+          <button
+            onClick={onToggleHistory}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              background: showHistory ? 'rgba(15, 76, 129, 0.1)' : 'rgba(15, 76, 129, 0.04)',
+              border: `1px solid ${showHistory ? 'var(--color-cyan)' : 'rgba(15, 76, 129, 0.15)'}`,
+              borderRadius: '10px',
+              padding: '6px 14px',
+              cursor: 'pointer',
+              transition: 'all 0.25s ease',
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            <span style={{ fontSize: '0.85rem' }}>🕘</span>
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6rem',
+              color: showHistory ? 'var(--color-cyan)' : 'var(--color-text-secondary)',
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              fontWeight: 600,
+            }}>History</span>
+          </button>
+
+          {/* Badge */}
           <div style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: 'var(--color-green)',
-            boxShadow: '0 0 8px var(--color-green)',
-            animation: 'pulse-glow 1.5s ease-in-out infinite',
-          }} />
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '0.6rem',
-            color: 'var(--color-cyan)',
-            letterSpacing: '0.15em',
-            textTransform: 'uppercase',
-          }}>Medical Imaging v1.0</span>
+            display: 'flex', alignItems: 'center', gap: '0.5rem',
+            background: 'rgba(2, 128, 144, 0.08)',
+            border: '1px solid rgba(2, 128, 144, 0.25)',
+            borderRadius: '20px',
+            padding: '5px 14px',
+            backdropFilter: 'blur(8px)',
+          }}>
+            <div style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: 'var(--color-green)',
+              boxShadow: '0 0 8px var(--color-green)',
+              animation: 'pulse-glow 1.5s ease-in-out infinite',
+            }} />
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6rem',
+              color: 'var(--color-cyan)',
+              letterSpacing: '0.15em',
+              textTransform: 'uppercase',
+            }}>Medical Imaging v1.0</span>
+          </div>
         </div>
       </div>
     </header>
   );
 }
+
