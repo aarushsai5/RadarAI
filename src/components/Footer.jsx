@@ -16,7 +16,7 @@ export default function Footer() {
           color: 'var(--color-text-primary)',
           fontWeight: 600,
         }}>
-          X-Ray · CT Scan · MRI Analysis · ClarivueAI © 2026
+          X-Ray · CT Scan · MRI · ECG Analysis · ClarivueAI © 2026
         </p>
         <p style={{
           fontFamily: 'var(--font-mono)',

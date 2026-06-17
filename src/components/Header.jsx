@@ -99,7 +99,7 @@ export default function Header({ showHistory, onToggleHistory }) {
               color: 'var(--color-cyan)',
               letterSpacing: '0.15em',
               textTransform: 'uppercase',
-            }}>Medical Imaging v1.0</span>
+            }}>Medical Imaging & ECG v1.0</span>
           </div>
         </div>
       </div>

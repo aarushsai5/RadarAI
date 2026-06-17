@@ -57,7 +57,7 @@ export default function Hero() {
         marginBottom: '1.5rem',
         letterSpacing: '0.02em',
       }}>
-        Upload any X-ray, CT scan, or MRI. Get an instant AI-powered diagnostic report.
+        Upload any X-ray, CT scan, MRI, or ECG. Get an instant AI-powered diagnostic report.
       </p>
 
       {/* Warning badge */}
