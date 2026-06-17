@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import * as ort from 'onnxruntime-web';
 import Header from './components/Header';
 import Hero from './components/Hero';
 import UploadZone from './components/UploadZone';
@@ -206,18 +207,68 @@ IMPORTANT DIRECTIVE: Incorporate these probability scores in your final report. 
 
 async function callLocalClassifier(file, scanType) {
   try {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('scan_type', scanType);
+    // 1. Fetch class map from static public folder
+    const classRes = await fetch(`/models/${scanType}_classes.json`);
+    if (!classRes.ok) throw new Error("Model not found in public folder");
+    const classMap = await classRes.json();
 
-    const response = await fetch('http://127.0.0.1:8000/predict', {
-      method: 'POST',
-      body: formData,
+    // Configure WebAssembly threads for performance
+    ort.env.wasm.numThreads = navigator.hardwareConcurrency || 4;
+
+    // 2. Load ONNX model in browser using WASM
+    const session = await ort.InferenceSession.create(`/models/${scanType}_model.onnx`, {
+      executionProviders: ['wasm']
     });
-    if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
-    return await response.json();
+
+    // 3. Preprocess image exactly like PyTorch (224x224, normalized)
+    const imgBitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = 224;
+    canvas.height = 224;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(imgBitmap, 0, 0, 224, 224);
+    const imageData = ctx.getImageData(0, 0, 224, 224).data;
+
+    const float32Data = new Float32Array(3 * 224 * 224);
+    const mean = [0.485, 0.456, 0.406];
+    const std = [0.229, 0.224, 0.225];
+
+    for (let i = 0; i < 224 * 224; i++) {
+      float32Data[i] = (imageData[i * 4] / 255.0 - mean[0]) / std[0]; // R
+      float32Data[224 * 224 + i] = (imageData[i * 4 + 1] / 255.0 - mean[1]) / std[1]; // G
+      float32Data[2 * 224 * 224 + i] = (imageData[i * 4 + 2] / 255.0 - mean[2]) / std[2]; // B
+    }
+
+    const tensor = new ort.Tensor('float32', float32Data, [1, 3, 224, 224]);
+    
+    // 4. Run Inference directly on the user's device
+    const inputName = session.inputNames[0];
+    const results = await session.run({ [inputName]: tensor });
+    const outputName = session.outputNames[0];
+    const logits = results[outputName].data;
+
+    // 5. Softmax to probabilities
+    const maxLogit = Math.max(...logits);
+    const exps = Array.from(logits).map(l => Math.exp(l - maxLogit));
+    const sumExps = exps.reduce((a, b) => a + b);
+    const probs = exps.map(e => e / sumExps);
+
+    // 6. Format predictions
+    let all_predictions = [];
+    for (let i = 0; i < probs.length; i++) {
+      all_predictions.push({ label: classMap[i.toString()], probability: probs[i] });
+    }
+    all_predictions.sort((a, b) => b.probability - a.probability);
+
+    return {
+      prediction: all_predictions[0].label,
+      confidence: all_predictions[0].probability,
+      predictions: all_predictions,
+      device: "Browser WebAssembly AI"
+    };
+
   } catch (err) {
-    console.warn('[ClarivueAI] Local classifier offline or model not trained:', err.message);
+    console.warn('[ClarivueAI] In-browser AI skipped (model not yet ready or offline):', err.message);
     return null;
   }
 }

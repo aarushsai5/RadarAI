@@ -157,7 +157,7 @@ def train_model(dataset_dir, output_dir, scan_type, epochs=5, batch_size=32, max
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train custom medical scan classifiers.")
     parser.add_argument("--dataset_dir", type=str, required=True, help="Path to the dataset directory (containing class folders)")
-    parser.add_argument("--output_dir", type=str, default="local_models", help="Directory to save output files")
+    parser.add_argument("--output_dir", type=str, default="public/models", help="Directory to save output files")
     parser.add_argument("--scan_type", type=str, default="xray", choices=["xray", "ecg", "mri", "ct", "dental"], help="Type of medical scan")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
     parser.add_argument("--max_images", type=int, default=2000, help="Max images per class to sample for fast training")
