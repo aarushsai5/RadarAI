@@ -41,8 +41,8 @@ def prepare_ecg():
     base = r"D:\XRAY DATA\ecg dataset"
     
     # PTBDB is usually better for structural abnormalities
-    generate_ecg_images(os.path.join(base, "ptbdb_normal.csv"), os.path.join(out_dir, "Normal"), "ptb_normal", 2000)
-    generate_ecg_images(os.path.join(base, "ptbdb_abnormal.csv"), os.path.join(out_dir, "Abnormal"), "ptb_abnormal", 2000)
+    generate_ecg_images(os.path.join(base, "ptbdb_normal.csv"), os.path.join(out_dir, "Normal"), "ptb_normal", 300)
+    generate_ecg_images(os.path.join(base, "ptbdb_abnormal.csv"), os.path.join(out_dir, "Abnormal"), "ptb_abnormal", 300)
     
     print("ECG dataset prepared at:", out_dir)
     for c in os.listdir(out_dir):

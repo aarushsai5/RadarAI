@@ -86,6 +86,7 @@ def train_model(dataset_dir, output_dir, scan_type, epochs=5, batch_size=32, max
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
     for epoch in range(epochs):
         model.train()
@@ -109,6 +110,7 @@ def train_model(dataset_dir, output_dir, scan_type, epochs=5, batch_size=32, max
         epoch_loss = running_loss / len(train_set)
         epoch_acc = correct / total * 100
         print(f"Epoch {epoch+1}/{epochs} - Train Loss: {epoch_loss:.4f} | Train Acc: {epoch_acc:.2f}%")
+        scheduler.step()
 
         # Validation phase
         model.eval()
