@@ -32,11 +32,12 @@ export default function HistoryPanel({ onViewResult, onClose }) {
   function getScanEmoji(scanType) {
     if (scanType === 'ct') return '🧠';
     if (scanType === 'mri') return '🫀';
+    if (scanType === 'ecg') return '💓';
     return '🫁';
   }
 
   function getScanLabel(scanType, isComparison) {
-    let label = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : 'X-Ray';
+    let label = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : scanType === 'ecg' ? 'ECG' : 'X-Ray';
     if (isComparison) label += ' (Comparison)';
     return label;
   }

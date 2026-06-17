@@ -1,6 +1,6 @@
 export default function ScanningAnimation({ scanType }) {
-  const label = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : 'X-Ray';
-  const emoji = scanType === 'ct' ? '🧠' : scanType === 'mri' ? '🫀' : '🫁';
+  const label = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : scanType === 'ecg' ? 'ECG' : 'X-Ray';
+  const emoji = scanType === 'ct' ? '🧠' : scanType === 'mri' ? '🫀' : scanType === 'ecg' ? '💓' : '🫁';
   return (
     <div style={{
       width: '100%', padding: '2rem 1.5rem 4rem',

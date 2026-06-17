@@ -1,6 +1,6 @@
 export default function PreviewCard({ file, imageUrl, onAnalyze, onRemove, isAnalyzing, scanType }) {
   const sizeMB = file ? (file.size / 1024 / 1024).toFixed(2) : 0;
-  const btnText = scanType === 'ct' ? 'Analyze CT Scan' : scanType === 'mri' ? 'Analyze MRI' : 'Analyze X-Ray';
+  const btnText = scanType === 'ct' ? 'Analyze CT Scan' : scanType === 'mri' ? 'Analyze MRI' : scanType === 'ecg' ? 'Analyze ECG' : 'Analyze X-Ray';
 
   return (
     <div style={{ width: '100%', padding: '0 1.5rem 3rem', display: 'flex', justifyContent: 'center' }} className="animate-fade-in-up">

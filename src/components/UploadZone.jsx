@@ -2,12 +2,14 @@ const SCAN_CONFIG = {
   xray: { emoji: '🫁', subtext: 'Upload chest, bone, or abdominal X-ray', chips: ['Chest X-Ray', 'Bone X-Ray', 'Spine X-Ray', 'Abdominal X-Ray'] },
   ct:   { emoji: '🧠', subtext: 'Upload CT scan slice or exported image', chips: ['CT Brain', 'CT Chest', 'CT Abdomen', 'CT Pelvis'] },
   mri:  { emoji: '🫀', subtext: 'Upload MRI scan image', chips: ['MRI Brain', 'MRI Spine', 'MRI Knee', 'MRI Cardiac'] },
+  ecg:  { emoji: '💓', subtext: 'Upload ECG or EKG strip image — 12 lead or rhythm strip', chips: ['12-Lead ECG', 'Rhythm Strip', 'Holter ECG', 'Stress ECG'] },
 };
 
 const SCAN_TABS = [
   { key: 'xray', label: 'X-Ray' },
   { key: 'ct',   label: 'CT Scan' },
   { key: 'mri',  label: 'MRI' },
+  { key: 'ecg',  label: 'ECG' },
 ];
 
 export default function UploadZone({ onFileSelect, isDragging, setIsDragging, scanType, setScanType }) {

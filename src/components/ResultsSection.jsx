@@ -12,7 +12,7 @@ function SectionLabel({ children }) {
 }
 
 function handleDownloadPDF(result, scanType) {
-  const scanLabel = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : 'X-Ray';
+  const scanLabel = scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : scanType === 'ecg' ? 'ECG' : 'X-Ray';
   const riskScore = calcRiskScore(result.severity, result.confidence);
   const sev = result.severity?.toLowerCase();
 
@@ -97,6 +97,11 @@ function handleDownloadPDF(result, scanType) {
         <div class="section-title">Recommendations</div>
         <ul>${recommendations || '<li>None</li>'}</ul>
       </div>
+      ${scanType === 'ecg' ? `<div class="section">
+        <div class="section-title">Heart Rate & Rhythm</div>
+        <p><strong>Heart Rate:</strong> ${result.heart_rate || 'N/A'}</p>
+        <p><strong>Rhythm:</strong> ${result.rhythm || 'N/A'}</p>
+      </div>` : ''}
       <div class="section">
         <div class="section-title">Next Steps</div>
         <p>${result.next_steps || 'N/A'}</p>
@@ -190,7 +195,7 @@ export default function ResultsSection({ result, onReset, scanType }) {
           </div>
           {/* X-Ray Type */}
           <div className="glass-card" style={{ textAlign: 'center' }}>
-            <SectionLabel>{scanType === 'ct' ? 'CT Scan Region Detected' : scanType === 'mri' ? 'MRI Sequence Detected' : 'X-Ray Type'}</SectionLabel>
+            <SectionLabel>{scanType === 'ct' ? 'CT Scan Region Detected' : scanType === 'mri' ? 'MRI Sequence Detected' : scanType === 'ecg' ? 'ECG Type Detected' : 'X-Ray Type'}</SectionLabel>
             <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--color-cyan)', fontWeight: 600 }}>
               {result.xray_type || '—'}
             </p>
@@ -201,6 +206,33 @@ export default function ResultsSection({ result, onReset, scanType }) {
             <span className={`badge ${confBadge}`}>{result.confidence || '—'}</span>
           </div>
         </div>
+
+        {/* ── Heart Rate & Rhythm (ECG only) ── */}
+        {scanType === 'ecg' && (result.heart_rate || result.rhythm) && (
+          <div className="glass-card card-stagger-2" style={{ marginBottom: '1rem' }}>
+            <SectionLabel>💓 Heart Rate & Rhythm</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div style={{
+                background: 'rgba(15, 76, 129, 0.04)',
+                border: '1px solid rgba(15, 76, 129, 0.1)',
+                borderRadius: '10px', padding: '1rem 1.25rem',
+                textAlign: 'center',
+              }}>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Heart Rate</p>
+                <p style={{ fontFamily: 'var(--font-heading)', fontSize: '1.4rem', fontWeight: 800, color: 'var(--color-cyan)' }}>{result.heart_rate || '—'}</p>
+              </div>
+              <div style={{
+                background: 'rgba(15, 76, 129, 0.04)',
+                border: '1px solid rgba(15, 76, 129, 0.1)',
+                borderRadius: '10px', padding: '1rem 1.25rem',
+                textAlign: 'center',
+              }}>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Rhythm</p>
+                <p style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-cyan)' }}>{result.rhythm || '—'}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Conditions Detected ── */}
         <div className="glass-card card-stagger-3" style={{ marginBottom: '1rem' }}>
@@ -300,7 +332,7 @@ export default function ResultsSection({ result, onReset, scanType }) {
         {/* ── Reset Button ── */}
         <div style={{ textAlign: 'center' }}>
           <button className="btn-cyan" onClick={onReset}>
-            ↩ &nbsp; Analyze Another {scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : 'X-Ray'}
+            ↩ &nbsp; Analyze Another {scanType === 'ct' ? 'CT Scan' : scanType === 'mri' ? 'MRI' : scanType === 'ecg' ? 'ECG' : 'X-Ray'}
           </button>
         </div>
       </div>

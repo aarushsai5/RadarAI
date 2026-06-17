@@ -56,118 +56,135 @@ function compressImage(file) {
   });
 }
 
-// ─── Clinical-grade X-ray prompt ────────────────────────────────────────────────
-const MEDICAL_PROMPT = `You are a senior board-certified radiologist (FRCR/ABR) with 25+ years of clinical experience in diagnostic and interventional radiology, currently working at a top-tier academic medical center.
+// ─── Clinical-grade X-ray prompt (upgraded — covers all body parts including Dental) ─
+const MEDICAL_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in diagnostic radiology. You have been trained on NIH ChestX-ray14 (112,000 images), CheXpert (224,000 images), RSNA Pneumonia Detection dataset, MURA Musculoskeletal dataset, VinBigData Chest X-ray dataset, and dental radiograph datasets.
 
-CRITICAL RULES — FOLLOW EXACTLY:
-• NEVER hallucinate or fabricate findings. Only describe what you can DIRECTLY observe in this image.
-• If you cannot determine something, say "Cannot be determined from this image" — never guess.
-• If the image is not a medical image or is too low quality, state that clearly instead of inventing findings.
-• Every finding MUST include precise anatomical location and standard radiological descriptors.
-• Use ONLY established medical terminology consistent with ACR, RCR, and WHO standards.
+Analyze this X-ray image with maximum precision. This may be a chest X-ray, abdominal X-ray, bone X-ray, spine X-ray, hand X-ray, foot X-ray, dental X-ray, or any other body part. Auto-detect the region and analyze accordingly.
 
-SYSTEMATIC READING PROTOCOL — follow every step:
-1. IMAGE IDENTIFICATION: Identify modality (plain film X-ray), view/projection (PA, AP, lateral, oblique, decubitus), and exact anatomical region. Note patient positioning, side markers if visible.
-2. TECHNICAL QUALITY: Assess rotation (spinous processes, clavicle symmetry), degree of inspiration (rib count above diaphragm), penetration/exposure, and any artifacts or obscuring factors. State if quality limits interpretation.
-3. STRUCTURE-BY-STRUCTURE EVALUATION:
-   — CHEST: Airways (trachea, carina, bronchi) → Breathing (lung fields zone by zone — upper/mid/lower, both sides) → Cardiac (silhouette size, CTR measurement, borders, chambers) → Diaphragm (contour, costophrenic angles) → Everything else (mediastinum width and contour, hila, pleural spaces, bones, soft tissues, tubes/lines/devices)
-   — BONE/JOINT: Alignment → Bones (cortex, medulla, trabecular pattern) → Cartilage/joint spaces → Soft tissues → Any hardware or foreign bodies
-   — ABDOMINAL: Gas pattern → Solid organs (liver, spleen, kidneys if visible) → Calcifications → Bones → Soft tissues
-4. FINDINGS: State each abnormality with exact location, size estimate if possible, morphology, and density descriptor. State normal findings explicitly too.
-5. DIFFERENTIAL DIAGNOSIS: For each abnormal finding, provide the most likely diagnosis AND at least 1-2 differential diagnoses ranked by probability.
-6. CLINICAL CORRELATION: Correlate all findings together into a coherent clinical picture.
+For Chest X-Ray specifically check for: Atelectasis, Cardiomegaly, Effusion, Infiltration, Mass, Nodule, Pneumonia, Pneumothorax, Consolidation, Edema, Emphysema, Fibrosis, Pleural Thickening, Hernia, Tuberculosis.
 
-Return ONLY a single valid JSON object. No markdown, no backticks, no extra text:
+For Bone X-Ray specifically check for: Fractures (hairline, compound, stress), Osteoporosis, Osteoarthritis, Bone tumors, Dislocations, Growth plate injuries, Osteomyelitis.
+
+For Dental X-Ray specifically check for: Dental caries (cavities), Periapical abscess, Bone loss, Impacted teeth, Root fractures, Periodontal disease, Cysts, Tumors.
+
+For Spine X-Ray specifically check for: Scoliosis, Kyphosis, Disc space narrowing, Vertebral fractures, Spondylolisthesis, Degenerative changes.
+
+For Abdominal X-Ray specifically check for: Bowel obstruction, Free air, Calcifications, Organomegaly, Foreign bodies.
+
+Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 
 {
-  "xray_type": "Specific projection and region — e.g. Chest PA Erect, Left Wrist AP/Lateral, Abdomen Supine, Cervical Spine Lateral",
+  "xray_type": "Auto-detected specific type e.g. Chest PA X-Ray, Dental Periapical X-Ray, Left Hand X-Ray, Lumbar Spine X-Ray",
   "severity": "None or Low or Medium or High",
-  "conditions_detected": ["Use exact ICD-compatible medical terminology with anatomical specificity. E.g.: Right lower lobe consolidation consistent with community-acquired pneumonia, Moderate left-sided pleural effusion, Cardiomegaly (CTR approximately 0.6), Left apical pneumothorax, Displaced transverse fracture of distal radius with dorsal angulation, No acute cardiopulmonary abnormality"],
-  "findings": "Write a comprehensive structured radiological report. Begin with technical quality assessment. Then describe EVERY anatomical structure systematically using the reading protocol above. Include measurements and size estimates where possible. Use precise location descriptors (right/left, upper/mid/lower, anterior/posterior, medial/lateral, proximal/distal). Describe density (opaque, lucent, ground-glass, consolidation, cavitation). Note both abnormal AND pertinent normal findings. This must read like an actual radiology report that a referring physician would receive.",
-  "recommendations": ["5-7 specific, evidence-based clinical recommendations. Include: relevant lab tests (e.g. CBC, CRP, D-dimer, ABG), follow-up imaging with specific modality and timing (e.g. CT chest with IV contrast within 24 hours), specialist referrals with urgency level, and therapeutic considerations. Each recommendation must be actionable and clinically justified by the findings."],
-  "next_steps": "Precise clinical pathway with urgency classification. Specify: (1) Urgency — routine/urgent/emergent, (2) Which specialist to consult — with rationale, (3) What investigations to order — in priority sequence, (4) Interim management considerations, (5) Follow-up timeline",
-  "confidence": "Low or Medium or High — base this on image quality, clarity of findings, and diagnostic certainty. Low = ambiguous/poor quality, Medium = likely but differentials exist, High = classic/unambiguous presentation",
-  "disclaimer": "AI-assisted radiological analysis for educational purposes only. This does not constitute a medical diagnosis. All findings must be correlated clinically and confirmed by a licensed radiologist or physician before any medical decision is made.",
-  "layman_summary": "2-3 sentences in plain English a non-medical person can understand. Name the specific condition found (or state that everything looks normal). Explain what it means for the patient in simple terms. Indicate if it's urgent or not. Be direct and honest — never vague."
+  "conditions_detected": ["comprehensive list of all detected conditions with anatomical location, or No abnormality detected if clear"],
+  "findings": "Extremely detailed clinical paragraph — describe opacity, density, contours, margins, calcifications, soft tissue, bone cortex, joint spaces, tooth structure, everything visible. Be as precise and detailed as a senior radiologist would be.",
+  "recommendations": ["4 to 6 specific actionable medical recommendations"],
+  "next_steps": "Specific specialist referral — pulmonologist, orthopedic, dentist, gastroenterologist etc.",
+  "confidence": "Low or Medium or High",
+  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
 }`;
 
 const SKIP_PHRASES = ['not found', 'not a valid', 'no endpoints', 'provider returned error', 'provider error', 'rate limit', 'quota'];
 
-const CT_SCAN_PROMPT = `You are a senior board-certified radiologist (FRCR/ABR) with 25+ years of clinical experience specializing in cross-sectional imaging and CT interpretation, currently working at a top-tier academic medical center.
+const CT_SCAN_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in CT scan interpretation. Trained on large scale CT imaging datasets covering neurological, thoracic, abdominal, and musculoskeletal CT scans.
 
-CRITICAL RULES — FOLLOW EXACTLY:
-• NEVER hallucinate or fabricate findings. Only describe what you can DIRECTLY observe in this image.
-• If you cannot determine something, say "Cannot be determined from this image" — never guess.
-• If the image is not a CT scan or is too low quality, state that clearly instead of inventing findings.
-• Every finding MUST include precise anatomical location, size estimates, and density descriptors.
-• Use ONLY established medical terminology consistent with ACR, RSNA, and WHO standards.
+Analyze this CT scan image with maximum clinical precision. Auto-detect the body region and scan protocol.
 
-SYSTEMATIC CT READING PROTOCOL — follow every step:
-1. IMAGE IDENTIFICATION: Identify scan type (non-contrast CT, contrast-enhanced CT, CT angiography), anatomical region (brain, chest, abdomen, pelvis, spine, extremity), and plane (axial, coronal, sagittal). Note slice thickness if determinable, and phase of contrast if applicable (arterial, portal venous, delayed).
-2. TECHNICAL QUALITY: Assess for motion artifact, beam hardening, incomplete coverage, contrast timing, and any factors limiting interpretation.
-3. SYSTEMATIC EVALUATION:
-   — CT BRAIN: Calvarium and scalp → Extra-axial spaces (epidural, subdural, subarachnoid) → Brain parenchyma (grey-white matter differentiation, each lobe systematically) → Ventricles (size, symmetry, obstruction) → Midline shift → Posterior fossa → Sella/parasellar → Orbits → Sinuses → Mastoid air cells → Vascular structures
-   — CT CHEST: Lungs (each lobe, ground-glass vs consolidation vs nodules, window settings) → Airways (trachea, bronchi) → Mediastinum (lymph nodes with short-axis measurement) → Heart and pericardium → Great vessels (aorta dimensions) → Pleural spaces → Chest wall → Bones → Upper abdomen if included
-   — CT ABDOMEN/PELVIS: Liver (size, density, focal lesions with segment location) → Gallbladder and biliary → Pancreas → Spleen → Adrenals → Kidneys and ureters → Bladder → Bowel (stomach through rectum) → Mesentery and peritoneum → Lymph nodes → Vessels (aorta, IVC) → Musculoskeletal → Pelvic organs
-4. MEASUREMENTS: Provide Hounsfield unit estimates where relevant (e.g., hyperdense blood ~60-80 HU, fluid ~0-20 HU). Measure lesion sizes in at least two dimensions.
-5. DIFFERENTIAL DIAGNOSIS: For each abnormal finding, provide the most likely diagnosis AND 2-3 differential diagnoses ranked by probability.
-6. CLINICAL CORRELATION: Synthesize all findings into a coherent clinical assessment.
+For CT Brain check for: Hemorrhage (epidural, subdural, subarachnoid, intracerebral), Infarct, Tumor, Edema, Hydrocephalus, Midline shift, Herniation, White matter changes, Calcifications.
 
-Return ONLY a single valid JSON object — no markdown, no backticks, no extra text:
+For CT Chest check for: Pulmonary embolism signs, Lung nodules, Ground glass opacities, Consolidation, Pleural effusion, Lymphadenopathy, Aortic abnormalities, Pericardial effusion.
+
+For CT Abdomen/Pelvis check for: Organ enlargement, Masses, Calculi (kidney/gallbladder), Appendicitis signs, Free fluid, Bowel obstruction, Vascular abnormalities, Lymph nodes.
+
+For CT Spine check for: Disc herniation, Spinal stenosis, Vertebral fractures, Cord compression, Spondylosis.
+
+Describe Hounsfield unit ranges where relevant. Note enhancement patterns if contrast is visible.
+
+Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 
 {
-  "xray_type": "CT Scan — specify exact type and region, e.g. Non-contrast CT Brain, Contrast-enhanced CT Chest/Abdomen/Pelvis, CT Pulmonary Angiography, CT Cervical Spine",
+  "xray_type": "Auto-detected specific type e.g. CT Brain Non-Contrast, CT Chest with Contrast, CT Abdomen Pelvis",
   "severity": "None or Low or Medium or High",
-  "conditions_detected": ["Use exact ICD-compatible medical terminology. E.g.: Acute right MCA territory infarct, 3.2cm right hepatic lobe hypodense lesion suspicious for metastasis, Acute appendicitis with periappendiceal fat stranding, No acute intracranial abnormality"],
-  "findings": "Write a comprehensive structured CT report. Begin with technical assessment and scan parameters. Then systematically describe EVERY structure using the protocol above. Include Hounsfield unit estimates, precise measurements, enhancement patterns, and anatomical relationships. Note both abnormal AND pertinent negative findings. This must read like an actual radiology report from an academic medical center.",
-  "recommendations": ["5-7 specific evidence-based recommendations. Include: relevant lab correlations, follow-up imaging with modality/timing/protocol, specialist referrals with urgency, and therapeutic considerations. Each must be justified by findings."],
-  "next_steps": "Precise clinical pathway: (1) Urgency — routine/urgent/emergent, (2) Specialist to consult and why, (3) Investigations in priority order, (4) Interim management, (5) Follow-up timeline",
-  "confidence": "Low or Medium or High — based on image quality, slice selection, and diagnostic certainty",
-  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed radiologist or physician.",
-  "layman_summary": "2-3 sentences in plain English. Name the condition found or state everything looks normal. Explain what it means simply. Indicate urgency. Be direct and honest."
+  "conditions_detected": ["comprehensive list of all detected conditions with precise anatomical location"],
+  "findings": "Extremely detailed clinical paragraph — describe attenuation values, enhancement patterns, organ sizes, lesion characteristics, margins, density, any mass effect, vascular structures, bone windows findings. Be as precise as a senior radiologist.",
+  "recommendations": ["4 to 6 specific actionable medical recommendations"],
+  "next_steps": "Specific specialist referral and urgency level",
+  "confidence": "Low or Medium or High",
+  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
 }`;
 
-const MRI_PROMPT = `You are a senior board-certified radiologist (FRCR/ABR) with 25+ years of clinical experience specializing in MRI interpretation and neuroradiology/musculoskeletal imaging, currently working at a top-tier academic medical center.
+const MRI_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in MRI interpretation across all sequences and body regions. Trained on large scale MRI datasets.
 
-CRITICAL RULES — FOLLOW EXACTLY:
-• NEVER hallucinate or fabricate findings. Only describe what you can DIRECTLY observe in this image.
-• If you cannot determine something, say "Cannot be determined from this image" — never guess.
-• If the image is not an MRI scan or is too low quality, state that clearly instead of inventing findings.
-• Every finding MUST include precise anatomical location, signal characteristics, and size estimates.
-• Use ONLY established medical terminology consistent with ACR, RSNA, and WHO standards.
+Analyze this MRI image with maximum clinical precision. Auto-detect the sequence type (T1, T2, FLAIR, DWI, GRE, STIR) and body region.
 
-SYSTEMATIC MRI READING PROTOCOL — follow every step:
-1. IMAGE IDENTIFICATION: Identify the MRI sequence (T1-weighted, T2-weighted, FLAIR, DWI/ADC, T1 post-contrast, STIR, GRE/SWI, MRA), anatomical region, and imaging plane (axial, coronal, sagittal). Note if contrast has been administered.
-2. SIGNAL ANALYSIS: For each finding, describe signal intensity relative to the sequence:
-   — T1: Is it hyperintense (bright = fat, blood products, melanin, protein) or hypointense (dark = fluid, most pathology)?
-   — T2: Is it hyperintense (bright = fluid, edema, most pathology) or hypointense (dark = calcium, hemosiderin, fibrous tissue)?
-   — FLAIR: Hyperintense lesions suggest pathology (edema, gliosis, demyelination); CSF is suppressed
-   — DWI/ADC: Restricted diffusion (DWI bright + ADC dark) = acute ischemia, abscess, hypercellular tumor
-3. SYSTEMATIC EVALUATION:
-   — MRI BRAIN: Scalp and calvarium → Extra-axial spaces → Cortical grey matter (each lobe) → White matter (periventricular, subcortical, deep) → Basal ganglia and thalami → Internal capsule → Brainstem (midbrain, pons, medulla) → Cerebellum → Ventricles and CSF spaces → Sella/pituitary → Cranial nerves → Vascular flow voids → Orbits and sinuses
-   — MRI SPINE: Vertebral body alignment and height → Disc morphology (each level — hydration, bulge, protrusion, extrusion, sequestration) → Spinal cord signal and caliber → Neural foramina → Facet joints → Paraspinal soft tissues → Conus and cauda equina
-   — MRI MUSCULOSKELETAL: Bones (marrow signal, fractures, AVN) → Cartilage (thickness, defects) → Ligaments (each major ligament — intact/partial tear/complete tear) → Tendons → Menisci (if knee) → Labrum (if shoulder/hip) → Muscles → Joint effusion → Soft tissues
-4. MEASUREMENTS: Measure lesion sizes in at least two dimensions. Note multiplicity and distribution pattern.
-5. DIFFERENTIAL DIAGNOSIS: For each abnormal finding, provide the most likely diagnosis AND 2-3 differential diagnoses ranked by probability based on signal characteristics and morphology.
-6. CLINICAL CORRELATION: Synthesize all findings. Correlate signal characteristics across sequences if multiple sequences are visible.
+For MRI Brain check for: Tumors (glioma, meningioma, metastasis), MS plaques, Infarcts (DWI restriction), Hemorrhage, Hydrocephalus, White matter lesions, Cortical atrophy, Pituitary abnormalities.
 
-Return ONLY a single valid JSON object — no markdown, no backticks, no extra text:
+For MRI Spine check for: Disc herniation, Cord signal changes, Syrinx, Tumor, Compression fractures, Ligament injury, Epidural abscess.
+
+For MRI Knee check for: ACL/PCL/MCL/LCL tears, Meniscal tears, Cartilage loss, Bone marrow edema, Effusion, Baker's cyst.
+
+For MRI Shoulder check for: Rotator cuff tears, Labral tears, Impingement, Bursitis, AC joint abnormality.
+
+For MRI Cardiac check for: Myocardial infarction, Cardiomyopathy, Pericardial disease, Valve abnormalities.
+
+Describe signal characteristics on each sequence. Note T1 hypointense/hyperintense, T2 signal, FLAIR suppression, DWI restriction where relevant.
+
+Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 
 {
-  "xray_type": "MRI — specify sequence and region, e.g. MRI Brain T2 FLAIR Axial, MRI Lumbar Spine T2 Sagittal, MRI Right Knee PD Fat-Sat, MRI Cardiac Cine SSFP",
+  "xray_type": "Auto-detected specific type e.g. MRI Brain T2 FLAIR, MRI Right Knee, MRI Lumbar Spine T1",
   "severity": "None or Low or Medium or High",
-  "conditions_detected": ["Use exact ICD-compatible medical terminology. E.g.: Multiple periventricular T2/FLAIR hyperintense lesions consistent with demyelination (MS), L4-L5 posterolateral disc extrusion with left S1 nerve root compression, Complete ACL tear with associated bone marrow edema pattern, Grade III chondromalacia of medial femoral condyle"],
-  "findings": "Write a comprehensive structured MRI report. Begin with sequence identification and technical quality. Describe signal intensity characteristics for each finding (T1/T2/FLAIR/DWI behavior). Systematically evaluate every structure using the protocol above. Include precise measurements, enhancement patterns if post-contrast, and morphological descriptors. Note both abnormal AND pertinent negative findings. This must read like an actual MRI report from an academic medical center.",
-  "recommendations": ["5-7 specific evidence-based recommendations. Include: additional MRI sequences or contrast if needed, correlative imaging, relevant lab tests, specialist referrals with urgency, and therapeutic considerations. Each must be justified by findings."],
-  "next_steps": "Precise clinical pathway: (1) Urgency — routine/urgent/emergent, (2) Specialist to consult and why, (3) Investigations in priority order, (4) Interim management, (5) Follow-up timeline",
-  "confidence": "Low or Medium or High — based on image quality, sequence availability, and diagnostic certainty",
-  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed radiologist or physician.",
-  "layman_summary": "2-3 sentences in plain English. Name the condition found or state everything looks normal. Explain what it means simply. Indicate urgency. Be direct and honest."
+  "conditions_detected": ["comprehensive list of all detected conditions with precise anatomical location and signal characteristics"],
+  "findings": "Extremely detailed clinical paragraph — describe signal intensities on each visible sequence, lesion size, location, margins, surrounding edema, mass effect, enhancement if visible, normal structures for comparison. Be as precise as a senior radiologist.",
+  "recommendations": ["4 to 6 specific actionable medical recommendations"],
+  "next_steps": "Specific specialist referral and urgency level",
+  "confidence": "Low or Medium or High",
+  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
+}`;
+
+const ECG_PROMPT = `You are a highly specialized cardiologist AI with expert knowledge in ECG and EKG interpretation. You have been trained on large scale ECG datasets including PhysioNet, PTB-XL (21,837 ECGs), and CPSC 2018 datasets.
+
+Analyze this ECG/EKG image with maximum clinical precision.
+
+Check systematically for the following:
+
+RATE: Calculate approximate heart rate from RR intervals.
+
+RHYTHM: Sinus rhythm, Atrial fibrillation, Atrial flutter, Supraventricular tachycardia, Ventricular tachycardia, Ventricular fibrillation, Heart block (1st, 2nd Mobitz I, 2nd Mobitz II, 3rd degree), Junctional rhythm, Ectopic beats.
+
+P WAVE: Presence, morphology, axis, duration, amplitude. P mitrale, P pulmonale.
+
+PR INTERVAL: Normal (120-200ms), Short (WPW syndrome), Prolonged (heart block).
+
+QRS COMPLEX: Duration, morphology, axis. Bundle branch blocks (LBBB, RBBB), Ventricular hypertrophy (LVH, RVH), Delta waves, Pathological Q waves.
+
+ST SEGMENT: Elevation (STEMI — specify leads and territory), Depression (ischemia, NSTEMI), Reciprocal changes.
+
+T WAVE: Inversion (specify leads), Hyperacute T waves, Flattening, Tall peaked T waves (hyperkalemia).
+
+QT INTERVAL: Calculate QTc. Prolonged QTc (>440ms men, >460ms women) — risk of Torsades.
+
+OTHER: Osborn waves (hypothermia), Epsilon waves (ARVC), Brugada pattern, Early repolarization.
+
+Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
+
+{
+  "xray_type": "ECG — specify type e.g. 12-Lead ECG, Rhythm Strip, Holter excerpt",
+  "heart_rate": "Approximate BPM e.g. 72 bpm",
+  "rhythm": "Primary rhythm identified",
+  "severity": "None or Low or Medium or High",
+  "conditions_detected": ["comprehensive list of all detected abnormalities with lead specific findings, or Normal Sinus Rhythm if no abnormality"],
+  "findings": "Extremely detailed systematic analysis — rate, rhythm, P wave, PR interval, QRS, ST segment, T wave, QTc, axis, any other findings. Be as precise as a senior cardiologist.",
+  "recommendations": ["4 to 6 specific actionable cardiac recommendations"],
+  "next_steps": "Urgency level and specialist referral — cardiology, emergency, routine follow-up",
+  "confidence": "Low or Medium or High",
+  "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed cardiologist or physician."
 }`;
 
 function getPromptForScanType(scanType) {
   if (scanType === 'ct') return CT_SCAN_PROMPT;
   if (scanType === 'mri') return MRI_PROMPT;
+  if (scanType === 'ecg') return ECG_PROMPT;
   return MEDICAL_PROMPT;
 }
 
@@ -182,7 +199,7 @@ async function callGroq(base64, mimeType, groqKey, prompt) {
     body: JSON.stringify({
       model: 'meta-llama/llama-4-scout-17b-16e-instruct', // free vision model on Groq
       messages: [
-        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
+        { role: 'system', content: prompt === ECG_PROMPT ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
         {
           role: 'user',
           content: [
@@ -231,7 +248,7 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
     body: JSON.stringify({
       model,
       messages: [
-        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
+        { role: 'system', content: prompt === ECG_PROMPT ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
         {
           role: 'user',
           content: [
