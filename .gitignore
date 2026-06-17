@@ -27,3 +27,11 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Local AI Models and Datasets
+local_models/
+local_ai/*_prepared/
+.venv/
+__pycache__/
+*.pth
+*.onnx

@@ -1,0 +1,40 @@
+ClarivueAI Local AI Trainer & Inference Server Instructions
+============================================================
+
+We have set up the virtual environment (.venv) and installed PyTorch, FastAPI, and ONNX Runtime with DirectML support for your AMD GPU.
+
+Follow these simple steps to train your models and start the server:
+
+1. Training a Model
+-------------------
+Choose a scan type (xray, ecg, mri, ct) and run the training script on a subset of your dataset.
+
+Open a PowerShell terminal in the project directory (D:\XRAY APP) and run:
+
+  .venv\Scripts\python local_ai\train.py --dataset_dir "PATH_TO_YOUR_FOLDER" --scan_type xray --epochs 5 --max_images 2000
+
+Replace "PATH_TO_YOUR_FOLDER" with the absolute path of the folder containing subfolders for each classification class. For example, if your structure is:
+  D:\datasets\xrays\pneumonia\
+  D:\datasets\xrays\normal\
+Then you should pass --dataset_dir "D:\datasets\xrays".
+
+The script will:
+  - Subsample up to 2000 images per class (to train fast on your hardware).
+  - Train the MobileNetV3 model for 5 epochs.
+  - Save the model weights and export a high-performance ".onnx" model to the "local_models/" directory.
+
+2. Starting the Inference Server
+--------------------------------
+Once you have trained at least one model, start the FastAPI local inference server:
+
+  .venv\Scripts\python local_ai\server.py
+
+The server will run on http://127.0.0.1:8000. 
+
+3. Web Application Integration
+------------------------------
+Our React app has been upgraded to automatically detect if your local server is running:
+  - If server.py is active, the React app sends the uploaded image to the local model first.
+  - It uses your AMD GPU (via DirectML) to get a classification in milliseconds.
+  - It then sends this prediction to Groq/OpenRouter, generating a rich clinical text report aligned with your trained model.
+  - If the server is offline, the React app seamlessly falls back to the cloud LLM, guaranteeing zero downtime.

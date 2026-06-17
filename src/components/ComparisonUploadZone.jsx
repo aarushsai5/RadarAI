@@ -3,7 +3,7 @@ export default function ComparisonUploadZone({
   isDragging1, setIsDragging1, isDragging2, setIsDragging2,
   onCompare, isAnalyzing, scanType,
 }) {
-  const scanEmoji = scanType === 'ct' ? '🧠' : scanType === 'mri' ? '🫀' : scanType === 'ecg' ? '💓' : '🫁';
+  const scanEmoji = scanType === 'ct' ? '🧠' : scanType === 'mri' ? '🫀' : scanType === 'ecg' ? '💓' : scanType === 'dental' ? '🦷' : '🫁';
 
   function renderZone(id, file, imageUrl, isDragging, setIsDragging, onFileSelect, label, browseLabel) {
     return (

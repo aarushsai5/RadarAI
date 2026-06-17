@@ -183,6 +183,38 @@ export default function ResultsSection({ result, onReset, scanType }) {
         {/* ── Risk Meter (FIRST CARD) ── */}
         <RiskMeter severity={result.severity} confidence={result.confidence} />
 
+        {/* ── Local GPU Classifier Meta (if present) ── */}
+        {result.local_model_meta && (
+          <div className="glass-card card-stagger-1" style={{
+            border: '1px solid rgba(0, 242, 254, 0.25)',
+            background: 'rgba(0, 242, 254, 0.03)',
+            marginBottom: '1rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '0.8rem 1.25rem',
+            borderRadius: '12px',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span style={{ fontSize: '1.25rem' }}>⚡</span>
+              <div style={{ textAlign: 'left' }}>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--color-cyan)', marginBottom: '0.1rem' }}>
+                  Local hardware acceleration active
+                </p>
+                <p style={{ fontFamily: 'var(--font-heading)', fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                  AMD GPU Classifier Model ({result.local_model_meta.device || 'DirectML'})
+                </p>
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '1px' }}>Top Classification</p>
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-cyan)' }}>
+                {result.local_model_meta.prediction} ({(result.local_model_meta.confidence * 100).toFixed(1)}%)
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* ── Row 1: Severity + X-ray Type + Confidence ── */}
         <div className="card-stagger-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
           {/* Severity */}

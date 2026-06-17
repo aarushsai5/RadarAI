@@ -181,11 +181,45 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
   "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed cardiologist or physician."
 }`;
 
-function getPromptForScanType(scanType) {
-  if (scanType === 'ct') return CT_SCAN_PROMPT;
-  if (scanType === 'mri') return MRI_PROMPT;
-  if (scanType === 'ecg') return ECG_PROMPT;
-  return MEDICAL_PROMPT;
+function getPromptForScanType(scanType, localPrediction = null) {
+  let promptText = MEDICAL_PROMPT;
+  if (scanType === 'ct') promptText = CT_SCAN_PROMPT;
+  else if (scanType === 'mri') promptText = MRI_PROMPT;
+  else if (scanType === 'ecg') promptText = ECG_PROMPT;
+
+  if (localPrediction && localPrediction.predictions) {
+    const predictionsSummary = localPrediction.predictions
+      .map(p => `- ${p.label}: ${(p.probability * 100).toFixed(1)}%`)
+      .join('\n');
+    
+    const localContext = `\n\n=== LOCAL ACCURACY CLASSIFIER (AMD GPU ACCELERATED) ===
+Our local DirectML model analyzed this image and predicted:
+${predictionsSummary}
+
+IMPORTANT DIRECTIVE: Incorporate these probability scores in your final report. If a specific abnormality shows high probability (> 50%), evaluate the scan structure meticulously for that condition.
+======================================================\n\n`;
+    
+    return localContext + promptText;
+  }
+  return promptText;
+}
+
+async function callLocalClassifier(file, scanType) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('scan_type', scanType);
+
+    const response = await fetch('http://127.0.0.1:8000/predict', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+    return await response.json();
+  } catch (err) {
+    console.warn('[ClarivueAI] Local classifier offline or model not trained:', err.message);
+    return null;
+  }
 }
 
 // ─── Groq: 100% free, 14,400 req/day, ~3-5s, works from India ─────────────────
@@ -494,9 +528,20 @@ function App() {
       const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
       if (!groqKey && !orKey) throw new Error('No API key configured. Set VITE_GROQ_API_KEY in .env');
 
+      // 1. Call local classifier (runs fast and fails silently if offline)
+      console.log('[ClarivueAI] Querying local AMD GPU classifier...');
+      const localAnalysis = await callLocalClassifier(file, scanType);
+      
+      // 2. Compress image and call LLM with local predictions integrated in prompt
       const { base64, mimeType } = await compressImage(file);
-      const prompt = getPromptForScanType(scanType);
+      const prompt = getPromptForScanType(scanType, localAnalysis);
       const parsed = await analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt);
+
+      if (localAnalysis) {
+        parsed.local_model_meta = localAnalysis;
+        console.log('[ClarivueAI] Local classifier results successfully merged into report.');
+      }
+
       setResult(parsed);
       saveToHistory(parsed, scanType, false);
     } catch (err) {
