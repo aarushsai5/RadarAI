@@ -35,3 +35,4 @@ local_ai/*_prepared/
 __pycache__/
 *.pth
 *.onnx
+!public/models/*.onnx

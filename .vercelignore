@@ -1,0 +1,7 @@
+.venv/
+node_modules/
+local_ai/*_prepared/
+local_models/
+__pycache__/
+*.pth
+.git/
