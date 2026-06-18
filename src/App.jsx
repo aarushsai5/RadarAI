@@ -57,16 +57,14 @@ function compressImage(file) {
   });
 }
 
-// ─── Clinical-grade X-ray prompt (upgraded — covers all body parts including Dental) ─
-const MEDICAL_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in diagnostic radiology. You have been trained on NIH ChestX-ray14 (112,000 images), CheXpert (224,000 images), RSNA Pneumonia Detection dataset, MURA Musculoskeletal dataset, VinBigData Chest X-ray dataset, and dental radiograph datasets.
+// ─── Clinical-grade X-ray prompt (upgraded — covers all body parts) ─
+const MEDICAL_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in diagnostic radiology. You have been trained on NIH ChestX-ray14 (112,000 images), CheXpert (224,000 images), RSNA Pneumonia Detection dataset, MURA Musculoskeletal dataset, and VinBigData Chest X-ray dataset.
 
-Analyze this X-ray image with maximum precision. This may be a chest X-ray, abdominal X-ray, bone X-ray, spine X-ray, hand X-ray, foot X-ray, dental X-ray, or any other body part. Auto-detect the region and analyze accordingly.
+Analyze this X-ray image with maximum precision. This may be a chest X-ray, abdominal X-ray, bone X-ray, spine X-ray, hand X-ray, foot X-ray, or any other body part. Auto-detect the region and analyze accordingly.
 
 For Chest X-Ray specifically check for: Atelectasis, Cardiomegaly, Effusion, Infiltration, Mass, Nodule, Pneumonia, Pneumothorax, Consolidation, Edema, Emphysema, Fibrosis, Pleural Thickening, Hernia, Tuberculosis.
 
 For Bone X-Ray specifically check for: Fractures (hairline, compound, stress), Osteoporosis, Osteoarthritis, Bone tumors, Dislocations, Growth plate injuries, Osteomyelitis.
-
-For Dental X-Ray specifically check for: Dental caries (cavities), Periapical abscess, Bone loss, Impacted teeth, Root fractures, Periodontal disease, Cysts, Tumors.
 
 For Spine X-Ray specifically check for: Scoliosis, Kyphosis, Disc space narrowing, Vertebral fractures, Spondylolisthesis, Degenerative changes.
 
@@ -75,12 +73,12 @@ For Abdominal X-Ray specifically check for: Bowel obstruction, Free air, Calcifi
 Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 
 {
-  "xray_type": "Auto-detected specific type e.g. Chest PA X-Ray, Dental Periapical X-Ray, Left Hand X-Ray, Lumbar Spine X-Ray",
+  "xray_type": "Auto-detected specific type e.g. Chest PA X-Ray, Left Hand X-Ray, Lumbar Spine X-Ray",
   "severity": "None or Low or Medium or High",
   "conditions_detected": ["comprehensive list of all detected conditions with anatomical location, or No abnormality detected if clear"],
-  "findings": "Extremely detailed clinical paragraph — describe opacity, density, contours, margins, calcifications, soft tissue, bone cortex, joint spaces, tooth structure, everything visible. Be as precise and detailed as a senior radiologist would be.",
+  "findings": "Extremely detailed clinical paragraph — describe opacity, density, contours, margins, calcifications, soft tissue, bone cortex, joint spaces, everything visible. Be as precise and detailed as a senior radiologist would be.",
   "recommendations": ["4 to 6 specific actionable medical recommendations"],
-  "next_steps": "Specific specialist referral — pulmonologist, orthopedic, dentist, gastroenterologist etc.",
+  "next_steps": "Specific specialist referral — pulmonologist, orthopedic, gastroenterologist etc.",
   "confidence": "Low or Medium or High",
   "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
 }`;
@@ -192,6 +190,17 @@ function getPromptForScanType(scanType, localPrediction = null) {
     const predictionsSummary = localPrediction.predictions
       .map(p => `- ${p.label}: ${(p.probability * 100).toFixed(1)}%`)
       .join('\n');
+
+    // If local model is inconclusive, warn the LLM not to trust it
+    if (localPrediction.inconclusive) {
+      const inconclusiveContext = `\n\n=== LOCAL CLASSIFIER WARNING ===
+Our local model analyzed this image but returned LOW CONFIDENCE results (below 70% threshold):
+${predictionsSummary}
+
+WARNING: These predictions are UNRELIABLE. Do NOT use them to bias your analysis. Rely entirely on your own visual interpretation of the image. If you are also uncertain, state that clearly.
+======================================================\n\n`;
+      return inconclusiveContext + promptText;
+    }
     
     const localContext = `\n\n=== LOCAL ACCURACY CLASSIFIER (AMD GPU ACCELERATED) ===
 Our local DirectML model analyzed this image and predicted:
@@ -203,6 +212,98 @@ IMPORTANT DIRECTIVE: Incorporate these probability scores in your final report. 
     return localContext + promptText;
   }
   return promptText;
+}
+
+// ─── ECG-specific preprocessing: bridge real photos → synthetic training data ──
+const CONFIDENCE_THRESHOLD = 0.70;
+
+function preprocessECGImage(canvas, ctx) {
+  const w = canvas.width, h = canvas.height;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const d = imageData.data;
+
+  // Step 1: Convert to grayscale (in-place on all 3 channels)
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    d[i] = d[i+1] = d[i+2] = gray;
+  }
+
+  // Step 2: Adaptive contrast normalization (stretch histogram)
+  let min = 255, max = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] < min) min = d[i];
+    if (d[i] > max) max = d[i];
+  }
+  const range = max - min || 1;
+  const scale = 250 / range;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = Math.min(255, Math.max(0, (d[i] - min) * scale + 3));
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Step 3: Noise reduction — 3x3 averaging filter to smooth paper texture
+  const src = ctx.getImageData(0, 0, w, h);
+  const dst = ctx.createImageData(w, h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          sum += src.data[((y+dy)*w + (x+dx)) * 4];
+        }
+      }
+      const avg = sum / 9;
+      const idx = (y * w + x) * 4;
+      dst.data[idx] = dst.data[idx+1] = dst.data[idx+2] = avg;
+      dst.data[idx+3] = 255;
+    }
+  }
+  // Copy border pixels
+  for (let x = 0; x < w; x++) {
+    for (const y of [0, h-1]) {
+      const idx = (y * w + x) * 4;
+      dst.data[idx] = dst.data[idx+1] = dst.data[idx+2] = src.data[idx];
+      dst.data[idx+3] = 255;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (const x of [0, w-1]) {
+      const idx = (y * w + x) * 4;
+      dst.data[idx] = dst.data[idx+1] = dst.data[idx+2] = src.data[idx];
+      dst.data[idx+3] = 255;
+    }
+  }
+  ctx.putImageData(dst, 0, 0);
+
+  // Step 4: Otsu binarization — compute optimal threshold from histogram
+  const bData = ctx.getImageData(0, 0, w, h);
+  const hist = new Array(256).fill(0);
+  for (let i = 0; i < bData.data.length; i += 4) hist[bData.data[i]]++;
+
+  const total = w * h;
+  let sumAll = 0;
+  for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+
+  let sumBg = 0, wBg = 0, maxVar = 0, threshold = 128;
+  for (let t = 0; t < 256; t++) {
+    wBg += hist[t];
+    if (wBg === 0) continue;
+    const wFg = total - wBg;
+    if (wFg === 0) break;
+    sumBg += t * hist[t];
+    const meanBg = sumBg / wBg;
+    const meanFg = (sumAll - sumBg) / wFg;
+    const variance = wBg * wFg * (meanBg - meanFg) * (meanBg - meanFg);
+    if (variance > maxVar) { maxVar = variance; threshold = t; }
+  }
+
+  // Apply threshold: below = black (waveform), above = white (background)
+  for (let i = 0; i < bData.data.length; i += 4) {
+    const v = bData.data[i] < threshold ? 0 : 255;
+    bData.data[i] = bData.data[i+1] = bData.data[i+2] = v;
+  }
+  ctx.putImageData(bData, 0, 0);
 }
 
 async function callLocalClassifier(file, scanType) {
@@ -227,6 +328,13 @@ async function callLocalClassifier(file, scanType) {
     canvas.height = 224;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(imgBitmap, 0, 0, 224, 224);
+
+    // ECG-specific preprocessing: bridge real photos → clean synthetic-like images
+    if (scanType === 'ecg') {
+      console.log('[ClarivueAI] Applying ECG preprocessing pipeline (grayscale → contrast → denoise → binarize)...');
+      preprocessECGImage(canvas, ctx);
+    }
+
     const imageData = ctx.getImageData(0, 0, 224, 224).data;
 
     const float32Data = new Float32Array(3 * 224 * 224);
@@ -260,10 +368,18 @@ async function callLocalClassifier(file, scanType) {
     }
     all_predictions.sort((a, b) => b.probability - a.probability);
 
+    const topConfidence = all_predictions[0].probability;
+    const isInconclusive = topConfidence < CONFIDENCE_THRESHOLD;
+
+    if (isInconclusive) {
+      console.warn(`[ClarivueAI] ⚠ Local model confidence ${(topConfidence * 100).toFixed(1)}% is below ${CONFIDENCE_THRESHOLD * 100}% threshold — flagging as INCONCLUSIVE`);
+    }
+
     return {
       prediction: all_predictions[0].label,
-      confidence: all_predictions[0].probability,
+      confidence: topConfidence,
       predictions: all_predictions,
+      inconclusive: isInconclusive,
       device: "Browser WebAssembly AI"
     };
 

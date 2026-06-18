@@ -141,6 +141,43 @@ export default function ResultsSection({ result, onReset, scanType }) {
         {/* ── Urgency Alert ── */}
         <UrgencyAlert severity={result.severity} />
 
+        {/* ── ECG Beta Notice (ECG only) ── */}
+        {scanType === 'ecg' && (
+          <div style={{
+            border: '1px solid rgba(217, 119, 6, 0.25)',
+            background: 'rgba(217, 119, 6, 0.05)',
+            borderRadius: '12px',
+            padding: '0.8rem 1.25rem',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            backdropFilter: 'blur(8px)',
+          }}>
+            <span style={{
+              fontSize: '0.5rem',
+              fontWeight: 800,
+              letterSpacing: '0.12em',
+              padding: '3px 8px',
+              borderRadius: '6px',
+              border: '1px solid rgba(217, 119, 6, 0.4)',
+              color: '#d97706',
+              background: 'rgba(217, 119, 6, 0.1)',
+              textTransform: 'uppercase',
+              flexShrink: 0,
+            }}>BETA</span>
+            <p style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.7rem',
+              color: 'var(--color-text-secondary)',
+              lineHeight: 1.6,
+              letterSpacing: '0.01em',
+            }}>
+              ECG analysis is currently in Beta. Results may be less reliable than other scan types. Please always confirm with a cardiologist.
+            </p>
+          </div>
+        )}
+
         {/* ── Layman Summary Banner ── */}
         {result.layman_summary && (() => {
           const borderColor = sev === 'high' ? 'var(--color-red)' : sev === 'medium' ? 'var(--color-yellow)' : 'var(--color-green)';
@@ -185,34 +222,64 @@ export default function ResultsSection({ result, onReset, scanType }) {
 
         {/* ── Local GPU Classifier Meta (if present) ── */}
         {result.local_model_meta && (
-          <div className="glass-card card-stagger-1" style={{
-            border: '1px solid rgba(0, 242, 254, 0.25)',
-            background: 'rgba(0, 242, 254, 0.03)',
-            marginBottom: '1rem',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '0.8rem 1.25rem',
-            borderRadius: '12px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <span style={{ fontSize: '1.25rem' }}>⚡</span>
-              <div style={{ textAlign: 'left' }}>
-                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--color-cyan)', marginBottom: '0.1rem' }}>
-                  Local hardware acceleration active
-                </p>
-                <p style={{ fontFamily: 'var(--font-heading)', fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                  AMD GPU Classifier Model ({result.local_model_meta.device || 'DirectML'})
+          <>
+            {/* Inconclusive warning: shown when confidence below threshold */}
+            {result.local_model_meta.inconclusive && (
+              <div className="card-stagger-1" style={{
+                border: '1px solid rgba(217, 119, 6, 0.35)',
+                background: 'rgba(217, 119, 6, 0.06)',
+                borderRadius: '12px',
+                padding: '0.9rem 1.25rem',
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+              }}>
+                <span style={{ fontSize: '1.25rem', flexShrink: 0 }}>⚠️</span>
+                <div>
+                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.18em', textTransform: 'uppercase', color: '#d97706', marginBottom: '0.2rem', fontWeight: 700 }}>
+                    Local Model — Result Inconclusive
+                  </p>
+                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                    The local classifier’s confidence ({(result.local_model_meta.confidence * 100).toFixed(1)}%) is below the 70% reliability threshold. The result shown is based primarily on the cloud AI analysis. Please consult a specialist for confirmation.
+                  </p>
+                </div>
+              </div>
+            )}
+            <div className="glass-card card-stagger-1" style={{
+              border: result.local_model_meta.inconclusive
+                ? '1px solid rgba(217, 119, 6, 0.25)'
+                : '1px solid rgba(0, 242, 254, 0.25)',
+              background: result.local_model_meta.inconclusive
+                ? 'rgba(217, 119, 6, 0.03)'
+                : 'rgba(0, 242, 254, 0.03)',
+              marginBottom: '1rem',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '0.8rem 1.25rem',
+              borderRadius: '12px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '1.25rem' }}>{result.local_model_meta.inconclusive ? '⚠️' : '⚡'}</span>
+                <div style={{ textAlign: 'left' }}>
+                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: result.local_model_meta.inconclusive ? '#d97706' : 'var(--color-cyan)', marginBottom: '0.1rem' }}>
+                    Local hardware acceleration active
+                  </p>
+                  <p style={{ fontFamily: 'var(--font-heading)', fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                    AMD GPU Classifier Model ({result.local_model_meta.device || 'DirectML'})
+                  </p>
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '1px' }}>Top Classification</p>
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 700, color: result.local_model_meta.inconclusive ? '#d97706' : 'var(--color-cyan)' }}>
+                  {result.local_model_meta.prediction} ({(result.local_model_meta.confidence * 100).toFixed(1)}%)
+                  {result.local_model_meta.inconclusive && <span style={{ fontSize: '0.6rem', marginLeft: '4px', opacity: 0.7 }}> — LOW</span>}
                 </p>
               </div>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '1px' }}>Top Classification</p>
-              <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 700, color: 'var(--color-cyan)' }}>
-                {result.local_model_meta.prediction} ({(result.local_model_meta.confidence * 100).toFixed(1)}%)
-              </p>
-            </div>
-          </div>
+          </>
         )}
 
         {/* ── Row 1: Severity + X-ray Type + Confidence ── */}

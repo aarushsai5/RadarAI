@@ -3,7 +3,6 @@ const SCAN_CONFIG = {
   ct:   { emoji: '🧠', subtext: 'Upload CT scan slice or exported image', chips: ['CT Brain', 'CT Chest', 'CT Abdomen', 'CT Pelvis'] },
   mri:  { emoji: '🫀', subtext: 'Upload MRI scan image', chips: ['MRI Brain', 'MRI Spine', 'MRI Knee', 'MRI Cardiac'] },
   ecg:  { emoji: '💓', subtext: 'Upload ECG or EKG strip image — 12 lead or rhythm strip', chips: ['12-Lead ECG', 'Rhythm Strip', 'Holter ECG', 'Stress ECG'] },
-  dental: { emoji: '🦷', subtext: 'Upload dental radiograph or periapical X-ray', chips: ['Dental X-Ray', 'Periapical', 'Cavity', 'Impacted Tooth'] },
 };
 
 const SCAN_TABS = [
@@ -11,7 +10,6 @@ const SCAN_TABS = [
   { key: 'ct',   label: 'CT Scan' },
   { key: 'mri',  label: 'MRI' },
   { key: 'ecg',  label: 'ECG' },
-  { key: 'dental', label: 'Dental' },
 ];
 
 export default function UploadZone({ onFileSelect, isDragging, setIsDragging, scanType, setScanType }) {
@@ -53,9 +51,27 @@ export default function UploadZone({ onFileSelect, isDragging, setIsDragging, sc
               cursor: 'pointer',
               transition: 'all 0.25s ease',
               boxShadow: scanType === key ? '0 0 16px rgba(15, 76, 129, 0.2)' : 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
             }}
           >
             {label}
+            {key === 'ecg' && (
+              <span style={{
+                fontSize: '0.45rem',
+                fontWeight: 800,
+                letterSpacing: '0.12em',
+                padding: '2px 6px',
+                borderRadius: '6px',
+                border: '1px solid rgba(217, 119, 6, 0.4)',
+                color: '#d97706',
+                background: 'rgba(217, 119, 6, 0.08)',
+                lineHeight: 1.2,
+                textTransform: 'uppercase',
+                flexShrink: 0,
+              }}>BETA</span>
+            )}
           </button>
         ))}
       </div>
