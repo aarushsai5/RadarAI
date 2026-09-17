@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import * as ort from 'onnxruntime-web';
 import Header from './components/Header';
 import Hero from './components/Hero';
@@ -397,7 +397,6 @@ function extractResponseText(data) {
   if (msg.content && msg.content.trim()) return msg.content;
   if (msg.reasoning && msg.reasoning.trim()) return msg.reasoning;
   if (msg.reasoning_details && msg.reasoning_details.length > 0) {
-    // Some models put the full text in reasoning_details array
     const combined = msg.reasoning_details.map(r => r.text || '').join('\n');
     if (combined.trim()) return combined;
   }
@@ -407,25 +406,85 @@ function extractResponseText(data) {
 // ─── Helper: parse JSON from AI text (handles markdown wrapping) ───────────────
 function parseJsonFromText(text) {
   if (!text) throw Object.assign(new Error('Empty response text'), { skip: true });
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw Object.assign(new Error('No valid JSON found in response'), { skip: true });
+  // Try to find JSON object — handle markdown code blocks too
+  const codeBlockMatch = text.match(/```(?:json)?\s*\n?(\{[\s\S]*?\})\s*\n?```/);
+  const rawMatch = text.match(/\{[\s\S]*\}/);
+  const jsonStr = codeBlockMatch ? codeBlockMatch[1] : rawMatch?.[0];
+  if (!jsonStr) throw Object.assign(new Error('No valid JSON found in response'), { skip: true });
   try {
-    return JSON.parse(jsonMatch[0]);
+    return JSON.parse(jsonStr);
   } catch (e) {
-    throw Object.assign(new Error('Failed to parse JSON response'), { skip: true });
+    // Try cleaning common issues: trailing commas, control chars
+    try {
+      const cleaned = jsonStr.replace(/,\s*([}\]])/g, '$1').replace(/[\x00-\x1F]/g, ' ');
+      return JSON.parse(cleaned);
+    } catch (e2) {
+      throw Object.assign(new Error('Failed to parse JSON response'), { skip: true });
+    }
   }
 }
 
 // ─── Helper: sleep for retry backoff ───────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── OpenRouter: free vision models (updated September 2026) ──────────────────
-const OR_FREE_MODELS = [
-  'inclusionai/ling-3.0-flash-vl:free',   // Best free vision model, works reliably
-  'google/gemma-4-26b-a4b-it:free',       // Google vision model, sometimes rate-limited
-  'google/gemma-4-31b-it:free',           // Google vision model, sometimes rate-limited
+// ─── Provider config ──────────────────────────────────────────────────────────
+// PRIMARY: openrouter/free auto-router — automatically selects whichever free
+// vision-capable model is currently live. Future-proof against model deprecation.
+const PRIMARY_MODEL = 'openrouter/free';
+
+// FALLBACK: explicit named free vision models, verified working Sept 2026.
+// These are tried in order if the auto-router fails.
+const FALLBACK_MODELS = [
+  'inclusionai/ling-3.0-flash-vl:free',                  // Strong vision, reasoning model
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',  // Nvidia omni vision+reasoning
+  'google/gemma-4-26b-a4b-it:free',                      // Google, sometimes rate-limited
 ];
 
+// Combined list for fallback chain: auto-router first, then explicit models
+const ALL_MODELS = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+
+// ─── Startup health check — pings each model and logs status ─────────────────
+let healthCheckDone = false;
+async function runHealthCheck(orKey) {
+  if (healthCheckDone || !orKey) return;
+  healthCheckDone = true;
+  console.log('[ClarivueAI] ╔══════════════════════════════════════════════════');
+  console.log('[ClarivueAI] ║  STARTUP HEALTH CHECK — Pinging vision models...');
+  console.log('[ClarivueAI] ╚══════════════════════════════════════════════════');
+
+  for (const model of ALL_MODELS) {
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${orKey}`,
+          'HTTP-Referer': 'https://clarivue-ai.vercel.app',
+          'X-Title': 'ClarivueAI-HealthCheck',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'Reply with only the word ALIVE' }],
+          max_tokens: 5,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        const errMsg = data?.error?.message || `HTTP ${response.status}`;
+        console.warn(`[ClarivueAI] ❌ ${model} — DOWN: ${errMsg}`);
+      } else {
+        const actualModel = data.model || model;
+        const text = data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning || '';
+        console.log(`[ClarivueAI] ✅ ${model} — ALIVE (routed to: ${actualModel}, response: "${text.trim().slice(0, 30)}"`);
+      }
+    } catch (err) {
+      console.warn(`[ClarivueAI] ❌ ${model} — NETWORK ERROR: ${err.message}`);
+    }
+  }
+  console.log('[ClarivueAI] ═══════════════════════════════════════════════════');
+}
+
+// ─── Core API call with retry-on-429 ──────────────────────────────────────────
 async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries = 2) {
   const systemContent = prompt === ECG_PROMPT
     ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.'
@@ -466,7 +525,6 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
     const data = await response.json();
     if (!response.ok) {
       const msg = data?.error?.message || `HTTP ${response.status}`;
-      // On 429, retry this same model before moving on
       if (response.status === 429 && attempt < maxRetries) {
         console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), will retry...`);
         continue;
@@ -476,9 +534,14 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
       throw new Error(msg);
     }
 
+    // Log which model the auto-router actually used
+    if (model === PRIMARY_MODEL && data.model) {
+      console.log(`[ClarivueAI] 🔀 Auto-router selected: ${data.model}`);
+    }
+
     const text = extractResponseText(data);
     if (!text) {
-      if (attempt < maxRetries) continue; // Retry on empty response
+      if (attempt < maxRetries) continue;
       throw Object.assign(new Error('Empty response'), { skip: true });
     }
 
@@ -488,15 +551,14 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
   throw Object.assign(new Error(`${model} failed after retries`), { skip: true });
 }
 
-// ─── Master analysis: OpenRouter free vision models with fallback chain ────────
+// ─── Master analysis: auto-router first, then explicit fallbacks ───────────────
 async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
-  // OpenRouter free vision models (Groq no longer offers free vision models)
   if (orKey) {
-    for (const model of OR_FREE_MODELS) {
+    for (const model of ALL_MODELS) {
       try {
-        console.log(`[ClarivueAI] Trying OpenRouter: ${model}`);
+        console.log(`[ClarivueAI] Trying: ${model}${model === PRIMARY_MODEL ? ' (auto-router)' : ''}...`);
         const result = await callOpenRouter(model, base64, mimeType, orKey, prompt);
-        console.log(`[ClarivueAI] ✅ OpenRouter success: ${model}`);
+        console.log(`[ClarivueAI] ✅ Success via: ${model}`);
         return result;
       } catch (err) {
         console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
@@ -561,6 +623,9 @@ async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey
         throw Object.assign(new Error(msg), { skip: true });
       throw new Error(msg);
     }
+    if (model === PRIMARY_MODEL && data.model) {
+      console.log(`[ClarivueAI] 🔀 Comparison auto-router selected: ${data.model}`);
+    }
     const text = extractResponseText(data);
     if (!text) {
       if (attempt < maxRetries) continue;
@@ -573,11 +638,11 @@ async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey
 
 async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey, orKey) {
   if (orKey) {
-    for (const model of OR_FREE_MODELS) {
+    for (const model of ALL_MODELS) {
       try {
-        console.log(`[ClarivueAI] Comparison: Trying OpenRouter: ${model}`);
+        console.log(`[ClarivueAI] Comparison: Trying ${model}${model === PRIMARY_MODEL ? ' (auto-router)' : ''}...`);
         const result = await callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey);
-        console.log(`[ClarivueAI] ✅ OpenRouter comparison success: ${model}`);
+        console.log(`[ClarivueAI] ✅ Comparison success via: ${model}`);
         return result;
       } catch (err) {
         console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
@@ -620,6 +685,12 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+
+  // ── Startup Health Check ──
+  useEffect(() => {
+    const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
+    if (orKey) runHealthCheck(orKey);
+  }, []);
 
   // ── Feature 1: Comparison Mode ──
   const [compareMode, setCompareMode] = useState(false);
