@@ -83,7 +83,7 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
   "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
 }`;
 
-const SKIP_PHRASES = ['not found', 'not a valid', 'no endpoints', 'provider returned error', 'provider error', 'rate limit', 'quota'];
+const SKIP_PHRASES = ['not found', 'not a valid', 'no endpoints', 'provider returned error', 'provider error', 'rate limit', 'quota', 'temporarily rate-limited', 'upstream', 'agentic harness'];
 
 const CT_SCAN_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in CT scan interpretation. Trained on large scale CT imaging datasets covering neurological, thoracic, abdominal, and musculoskeletal CT scans.
 
@@ -389,115 +389,108 @@ async function callLocalClassifier(file, scanType) {
   }
 }
 
-// ─── Groq: 100% free, 14,400 req/day, ~3-5s, works from India ─────────────────
-async function callGroq(base64, mimeType, groqKey, prompt) {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${groqKey}`,
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct', // free vision model on Groq
-      messages: [
-        { role: 'system', content: prompt === ECG_PROMPT ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
-      temperature: 0,
-      max_tokens: 4000,
-    }),
-  });
-
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error?.message || `Groq HTTP ${response.status}`);
-
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error('Empty Groq response');
-
-  // Better JSON extraction in case model wraps in markdown
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No valid JSON found in Groq response');
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    throw new Error('Failed to parse Groq JSON response');
+// ─── Helper: extract text from response (handles reasoning-only models) ────────
+function extractResponseText(data) {
+  const msg = data.choices?.[0]?.message;
+  if (!msg) return null;
+  // Prefer content field, fall back to reasoning field (for thinking models)
+  if (msg.content && msg.content.trim()) return msg.content;
+  if (msg.reasoning && msg.reasoning.trim()) return msg.reasoning;
+  if (msg.reasoning_details && msg.reasoning_details.length > 0) {
+    // Some models put the full text in reasoning_details array
+    const combined = msg.reasoning_details.map(r => r.text || '').join('\n');
+    if (combined.trim()) return combined;
   }
+  return null;
 }
 
-// ─── OpenRouter: free fallback models ─────────────────────────────────────────
-const OR_FREE_MODELS = [
-  'google/gemma-4-27b-it:free',
-  'google/gemma-4-31b-it:free',
-  'nvidia/nemotron-nano-12b-v2-vl:free',
-];
-
-async function callOpenRouter(model, base64, mimeType, orKey, prompt) {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${orKey}`,
-      'HTTP-Referer': 'http://localhost:5173',
-      'X-Title': 'ClarivueAI',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: prompt === ECG_PROMPT ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.' },
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
-            { type: 'text', text: prompt },
-          ],
-        },
-      ],
-      temperature: 0,
-      max_tokens: 4000,
-    }),
-  });
-
-  const data = await response.json();
-  if (!response.ok) {
-    const msg = data?.error?.message || `HTTP ${response.status}`;
-    if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
-      throw Object.assign(new Error(msg), { skip: true });
-    throw new Error(msg);
-  }
-
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw Object.assign(new Error('Empty response'), { skip: true });
-
+// ─── Helper: parse JSON from AI text (handles markdown wrapping) ───────────────
+function parseJsonFromText(text) {
+  if (!text) throw Object.assign(new Error('Empty response text'), { skip: true });
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw Object.assign(new Error('No valid JSON found in response'), { skip: true });
   try {
     return JSON.parse(jsonMatch[0]);
   } catch (e) {
-    throw Object.assign(new Error('Failed to parse OpenRouter JSON response'), { skip: true });
+    throw Object.assign(new Error('Failed to parse JSON response'), { skip: true });
   }
 }
 
-// ─── Master analysis: Groq first, OpenRouter free models as fallback ───────────
-async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
-  // 1. Try Groq (fastest, completely free)
-  if (groqKey) {
-    try {
-      console.log('[ClarivueAI] Trying Groq (Llama 4 Scout)...');
-      const result = await callGroq(base64, mimeType, groqKey, prompt);
-      console.log('[ClarivueAI] ✅ Groq success');
-      return result;
-    } catch (err) {
-      console.warn('[ClarivueAI] Groq failed:', err.message);
+// ─── Helper: sleep for retry backoff ───────────────────────────────────────────
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─── OpenRouter: free vision models (updated September 2026) ──────────────────
+const OR_FREE_MODELS = [
+  'inclusionai/ling-3.0-flash-vl:free',   // Best free vision model, works reliably
+  'google/gemma-4-26b-a4b-it:free',       // Google vision model, sometimes rate-limited
+  'google/gemma-4-31b-it:free',           // Google vision model, sometimes rate-limited
+];
+
+async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries = 2) {
+  const systemContent = prompt === ECG_PROMPT
+    ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.'
+    : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.';
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const backoff = 2000 * attempt; // 2s, 4s
+      console.log(`[ClarivueAI] Retrying ${model} in ${backoff}ms (attempt ${attempt + 1})...`);
+      await sleep(backoff);
     }
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${orKey}`,
+        'HTTP-Referer': 'https://clarivue-ai.vercel.app',
+        'X-Title': 'ClarivueAI',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemContent },
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+              { type: 'text', text: prompt },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 4000,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      const msg = data?.error?.message || `HTTP ${response.status}`;
+      // On 429, retry this same model before moving on
+      if (response.status === 429 && attempt < maxRetries) {
+        console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), will retry...`);
+        continue;
+      }
+      if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
+        throw Object.assign(new Error(msg), { skip: true });
+      throw new Error(msg);
+    }
+
+    const text = extractResponseText(data);
+    if (!text) {
+      if (attempt < maxRetries) continue; // Retry on empty response
+      throw Object.assign(new Error('Empty response'), { skip: true });
+    }
+
+    return parseJsonFromText(text);
   }
 
-  // 2. Fallback to OpenRouter free models
+  throw Object.assign(new Error(`${model} failed after retries`), { skip: true });
+}
+
+// ─── Master analysis: OpenRouter free vision models with fallback chain ────────
+async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
+  // OpenRouter free vision models (Groq no longer offers free vision models)
   if (orKey) {
     for (const model of OR_FREE_MODELS) {
       try {
@@ -513,7 +506,7 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
     }
   }
 
-  throw new Error('All providers failed. Check your API keys and try again.');
+  throw new Error('All providers failed. Please try again in a few seconds — free models may be temporarily rate-limited.');
 }
 
 // ─── Comparison Prompt ──────────────────────────────────────────────────────────
@@ -533,72 +526,52 @@ const COMPARISON_PROMPT = `You are an expert radiologist AI. You are given two m
 }`;
 
 // ─── Comparison API calls (two images in one request) ──────────────────────────
-async function callGroqComparison(b64_1, mime1, b64_2, mime2, groqKey) {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      messages: [
-        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
-        { role: 'user', content: [
-          { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
-          { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
-          { type: 'text', text: COMPARISON_PROMPT },
-        ]},
-      ],
-      temperature: 0, max_tokens: 4000,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error?.message || `Groq HTTP ${response.status}`);
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error('Empty Groq response');
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No valid JSON in Groq response');
-  try { return JSON.parse(jsonMatch[0]); } catch (e) { throw new Error('Failed to parse Groq comparison JSON'); }
-}
+async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey, maxRetries = 2) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const backoff = 2000 * attempt;
+      console.log(`[ClarivueAI] Retrying comparison ${model} in ${backoff}ms (attempt ${attempt + 1})...`);
+      await sleep(backoff);
+    }
 
-async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey) {
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${orKey}`, 'HTTP-Referer': 'http://localhost:5173', 'X-Title': 'ClarivueAI' },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
-        { role: 'user', content: [
-          { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
-          { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
-          { type: 'text', text: COMPARISON_PROMPT },
-        ]},
-      ],
-      temperature: 0, max_tokens: 4000,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const msg = data?.error?.message || `HTTP ${response.status}`;
-    if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
-      throw Object.assign(new Error(msg), { skip: true });
-    throw new Error(msg);
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${orKey}`, 'HTTP-Referer': 'https://clarivue-ai.vercel.app', 'X-Title': 'ClarivueAI' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
+          { role: 'user', content: [
+            { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
+            { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
+            { type: 'text', text: COMPARISON_PROMPT },
+          ]},
+        ],
+        temperature: 0, max_tokens: 4000,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const msg = data?.error?.message || `HTTP ${response.status}`;
+      if (response.status === 429 && attempt < maxRetries) {
+        console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), will retry...`);
+        continue;
+      }
+      if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
+        throw Object.assign(new Error(msg), { skip: true });
+      throw new Error(msg);
+    }
+    const text = extractResponseText(data);
+    if (!text) {
+      if (attempt < maxRetries) continue;
+      throw Object.assign(new Error('Empty response'), { skip: true });
+    }
+    return parseJsonFromText(text);
   }
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw Object.assign(new Error('Empty response'), { skip: true });
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw Object.assign(new Error('No valid JSON in response'), { skip: true });
-  try { return JSON.parse(jsonMatch[0]); } catch (e) { throw Object.assign(new Error('Failed to parse comparison JSON'), { skip: true }); }
+  throw Object.assign(new Error(`${model} comparison failed after retries`), { skip: true });
 }
 
 async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey, orKey) {
-  if (groqKey) {
-    try {
-      console.log('[ClarivueAI] Comparison: Trying Groq...');
-      const result = await callGroqComparison(b64_1, mime1, b64_2, mime2, groqKey);
-      console.log('[ClarivueAI] ✅ Groq comparison success');
-      return result;
-    } catch (err) { console.warn('[ClarivueAI] Groq comparison failed:', err.message); }
-  }
   if (orKey) {
     for (const model of OR_FREE_MODELS) {
       try {
@@ -613,7 +586,7 @@ async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey
       }
     }
   }
-  throw new Error('All providers failed. Check your API keys and try again.');
+  throw new Error('All providers failed. Please try again in a few seconds — free models may be temporarily rate-limited.');
 }
 
 // ─── History helpers ────────────────────────────────────────────────────────────
