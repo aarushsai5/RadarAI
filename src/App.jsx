@@ -75,6 +75,7 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 {
   "xray_type": "Auto-detected specific type e.g. Chest PA X-Ray, Left Hand X-Ray, Lumbar Spine X-Ray",
   "severity": "None or Low or Medium or High",
+  "layman_summary": "One short, simple sentence in plain English that a normal, non-medical person can easily understand. State exactly what the primary issue is (e.g. 'This scan shows a high risk of pneumonia.').",
   "conditions_detected": ["comprehensive list of all detected conditions with anatomical location, or No abnormality detected if clear"],
   "findings": "Extremely detailed clinical paragraph — describe opacity, density, contours, margins, calcifications, soft tissue, bone cortex, joint spaces, everything visible. Be as precise and detailed as a senior radiologist would be.",
   "recommendations": ["4 to 6 specific actionable medical recommendations"],
@@ -104,6 +105,7 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 {
   "xray_type": "Auto-detected specific type e.g. CT Brain Non-Contrast, CT Chest with Contrast, CT Abdomen Pelvis",
   "severity": "None or Low or Medium or High",
+  "layman_summary": "One short, simple sentence in plain English that a normal, non-medical person can easily understand. State exactly what the primary issue is.",
   "conditions_detected": ["comprehensive list of all detected conditions with precise anatomical location"],
   "findings": "Extremely detailed clinical paragraph — describe attenuation values, enhancement patterns, organ sizes, lesion characteristics, margins, density, any mass effect, vascular structures, bone windows findings. Be as precise as a senior radiologist.",
   "recommendations": ["4 to 6 specific actionable medical recommendations"],
@@ -133,6 +135,7 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
 {
   "xray_type": "Auto-detected specific type e.g. MRI Brain T2 FLAIR, MRI Right Knee, MRI Lumbar Spine T1",
   "severity": "None or Low or Medium or High",
+  "layman_summary": "One short, simple sentence in plain English that a normal, non-medical person can easily understand. State exactly what the primary issue is.",
   "conditions_detected": ["comprehensive list of all detected conditions with precise anatomical location and signal characteristics"],
   "findings": "Extremely detailed clinical paragraph — describe signal intensities on each visible sequence, lesion size, location, margins, surrounding edema, mass effect, enhancement if visible, normal structures for comparison. Be as precise as a senior radiologist.",
   "recommendations": ["4 to 6 specific actionable medical recommendations"],
@@ -172,6 +175,7 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
   "heart_rate": "Approximate BPM e.g. 72 bpm",
   "rhythm": "Primary rhythm identified",
   "severity": "None or Low or Medium or High",
+  "layman_summary": "One short, simple sentence in plain English that a normal, non-medical person can easily understand. State exactly what the primary issue is.",
   "conditions_detected": ["comprehensive list of all detected abnormalities with lead specific findings, or Normal Sinus Rhythm if no abnormality"],
   "findings": "Extremely detailed systematic analysis — rate, rhythm, P wave, PR interval, QRS, ST segment, T wave, QTc, axis, any other findings. Be as precise as a senior cardiologist.",
   "recommendations": ["4 to 6 specific actionable cardiac recommendations"],
@@ -581,6 +585,7 @@ const COMPARISON_PROMPT = `You are an expert radiologist AI. You are given two m
   "comparison": "Detailed paragraph comparing both scans — what has changed, improved, worsened, or remained stable",
   "progression": "Improved or Stable or Worsened",
   "severity_now": "None or Low or Medium or High",
+  "layman_summary": "One short, simple sentence in plain English that a normal, non-medical person can easily understand. State exactly what has changed (e.g. 'The pneumonia has improved significantly since the last scan.').",
   "recommendations": ["3 to 5 recommendations based on progression"],
   "next_steps": "What patient should do next based on comparison",
   "confidence": "Low or Medium or High",
