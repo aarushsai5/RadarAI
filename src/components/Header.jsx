@@ -1,4 +1,4 @@
-export default function Header({ showHistory, onToggleHistory }) {
+export default function Header({ showHistory, onToggleHistory, onOpenApiKey }) {
   return (
     <header style={{
       position: 'sticky', top: 0, zIndex: 100,
@@ -51,8 +51,34 @@ export default function Header({ showHistory, onToggleHistory }) {
           }}>ClarivueAI</span>
         </div>
 
-        {/* Right side: History button + Badge */}
+        {/* Right side: API Key + History + Badge */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* API Key Settings Button */}
+          <button
+            onClick={onOpenApiKey}
+            title="Configure OpenRouter / AI API Key"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              background: 'rgba(15, 76, 129, 0.04)',
+              border: '1px solid rgba(15, 76, 129, 0.15)',
+              borderRadius: '10px',
+              padding: '6px 14px',
+              cursor: 'pointer',
+              transition: 'all 0.25s ease',
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            <span style={{ fontSize: '0.85rem' }}>🔑</span>
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6rem',
+              color: 'var(--color-text-secondary)',
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              fontWeight: 600,
+            }}>API Key</span>
+          </button>
+
           {/* History Toggle Button */}
           <button
             onClick={onToggleHistory}

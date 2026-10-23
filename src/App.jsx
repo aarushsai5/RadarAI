@@ -10,6 +10,12 @@ import ComparisonUploadZone from './components/ComparisonUploadZone';
 import ComparisonResultsSection from './components/ComparisonResultsSection';
 import HistoryPanel from './components/HistoryPanel';
 import Footer from './components/Footer';
+import ApiKeyModal from './components/ApiKeyModal';
+
+// Helper to get active OpenRouter API key (supports local storage override or .env)
+function getActiveOpenRouterKey() {
+  return localStorage.getItem('clarivue_openrouter_api_key') || import.meta.env.VITE_OPENROUTER_API_KEY || '';
+}
 
 // ─── Medical-grade image preprocessing ─────────────────────────────────────────
 function compressImage(file) {
@@ -606,7 +612,17 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
     if (!response.ok) {
       const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
       
-      // If 429 rate limit and attempts remain, try backoff
+      // Check if account-wide daily free model limit was reached (free-models-per-day)
+      if (msg.includes('free-models-per-day') || (response.status === 429 && msg.toLowerCase().includes('free-models'))) {
+        console.warn(`[ClarivueAI] 🛑 OpenRouter account daily limit hit: ${msg}`);
+        throw Object.assign(new Error('OpenRouter daily free-tier limit exceeded (free-models-per-day). All free models on this API key are paused until the UTC midnight reset. Please configure a new API key in settings or add credits on openrouter.ai.'), {
+          isDailyQuotaExceeded: true,
+          skip: true,
+          status: 429,
+        });
+      }
+
+      // If normal 429 rate limit (concurrency or temporary) and attempts remain, try backoff
       if (response.status === 429 && attempt < maxRetries) {
         console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), retrying...`);
         continue;
@@ -653,14 +669,18 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
       } catch (err) {
         lastError = err;
         console.warn(`[ClarivueAI] ❌ ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
-        // Silently advance to the next model in the chain
+        // If the OpenRouter account hit free-models-per-day, all free models share this limit — fast fail immediately
+        if (err.isDailyQuotaExceeded) {
+          throw err;
+        }
         continue;
       }
     }
     console.error('[ClarivueAI] All fallback models exhausted. Last error:', lastError);
+    if (lastError?.isDailyQuotaExceeded) throw lastError;
   }
 
-  throw new Error('All diagnostic AI models are currently rate-limited or unavailable. Please retry in a few moments.');
+  throw new Error('All diagnostic AI models are currently rate-limited or unavailable. Please retry in a few moments or enter a new API key in settings.');
 }
 
 // ─── Comparison Prompt ──────────────────────────────────────────────────────────
@@ -725,6 +745,17 @@ async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey
 
     if (!response.ok) {
       const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
+      
+      // Check if account-wide daily free model limit was reached (free-models-per-day)
+      if (msg.includes('free-models-per-day') || (response.status === 429 && msg.toLowerCase().includes('free-models'))) {
+        console.warn(`[ClarivueAI] 🛑 OpenRouter comparison account daily limit hit: ${msg}`);
+        throw Object.assign(new Error('OpenRouter daily free-tier limit exceeded (free-models-per-day). All free models on this API key are paused until the UTC midnight reset. Please configure a new API key in settings or add credits on openrouter.ai.'), {
+          isDailyQuotaExceeded: true,
+          skip: true,
+          status: 429,
+        });
+      }
+
       if (response.status === 429 && attempt < maxRetries) {
         console.warn(`[ClarivueAI] ⏳ Comparison ${model} rate-limited (429), retrying...`);
         continue;
@@ -767,12 +798,16 @@ async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey
       } catch (err) {
         lastError = err;
         console.warn(`[ClarivueAI] ❌ Comparison ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
+        if (err.isDailyQuotaExceeded) {
+          throw err;
+        }
         continue;
       }
     }
     console.error('[ClarivueAI] All comparison fallback models exhausted. Last error:', lastError);
+    if (lastError?.isDailyQuotaExceeded) throw lastError;
   }
-  throw new Error('All diagnostic providers are currently unavailable or rate-limited. Please retry in a few moments.');
+  throw new Error('All diagnostic providers are currently unavailable or rate-limited. Please retry in a few moments or enter a new API key in settings.');
 }
 
 // ─── History helpers ────────────────────────────────────────────────────────────
@@ -807,11 +842,9 @@ function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  // ── Startup Health Check ──
-  useEffect(() => {
-    const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
-    if (orKey) runHealthCheck(orKey);
-  }, []);
+  // ── Modals & Drawers ──
+  const [showHistory, setShowHistory] = useState(false);
+  const [showApiModal, setShowApiModal] = useState(false);
 
   // ── Feature 1: Comparison Mode ──
   const [compareMode, setCompareMode] = useState(false);
@@ -820,10 +853,7 @@ function App() {
   const [isDragging2, setIsDragging2] = useState(false);
   const [comparisonResult, setComparisonResult] = useState(null);
 
-  // ── Feature 2: History ──
-  const [showHistory, setShowHistory] = useState(false);
-
-  // ── Existing handlers (unchanged) ──
+  // ── Existing handlers ──
   const handleFileSelect = useCallback((selectedFile) => {
     if (!selectedFile) return;
     if (!['image/jpeg', 'image/png'].includes(selectedFile.type)) {
@@ -857,8 +887,8 @@ function App() {
 
     try {
       const groqKey = import.meta.env.VITE_GROQ_API_KEY;
-      const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
-      if (!groqKey && !orKey) throw new Error('No API key configured. Set VITE_GROQ_API_KEY in .env');
+      const orKey = getActiveOpenRouterKey();
+      if (!groqKey && !orKey) throw new Error('No API key configured. Click "API Key" in the header to set your OpenRouter key.');
 
       // 1. Call local classifier (runs fast and fails silently if offline)
       console.log('[ClarivueAI] Querying local AMD GPU classifier...');
@@ -904,8 +934,8 @@ function App() {
 
     try {
       const groqKey = import.meta.env.VITE_GROQ_API_KEY;
-      const orKey = import.meta.env.VITE_OPENROUTER_API_KEY;
-      if (!groqKey && !orKey) throw new Error('No API key configured. Set VITE_GROQ_API_KEY in .env');
+      const orKey = getActiveOpenRouterKey();
+      if (!groqKey && !orKey) throw new Error('No API key configured. Click "API Key" in the header to set your OpenRouter key.');
 
       const img1 = await compressImage(file);
       const img2 = await compressImage(file2);
@@ -993,7 +1023,17 @@ function App() {
       </div>
 
       <div style={{ position: 'relative', zIndex: 2, display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <Header showHistory={showHistory} onToggleHistory={() => setShowHistory(h => !h)} />
+        <Header
+          showHistory={showHistory}
+          onToggleHistory={() => setShowHistory(h => !h)}
+          onOpenApiKey={() => setShowApiModal(true)}
+        />
+
+        <ApiKeyModal
+          isOpen={showApiModal}
+          onClose={() => setShowApiModal(false)}
+          onKeySaved={() => setError(null)}
+        />
 
         <main style={{ flex: 1, width: '100%' }}>
           <Hero />
@@ -1005,9 +1045,35 @@ function App() {
                 background: 'rgba(201, 24, 74, 0.06)', border: '1px solid rgba(201, 24, 74, 0.25)',
                 borderRadius: '12px', padding: '1rem 1.5rem', textAlign: 'center',
               }}>
-                <p style={{ color: 'var(--color-red)', fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
+                <p style={{
+                  color: 'var(--color-red)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.85rem',
+                  lineHeight: 1.5,
+                  marginBottom: (error.includes('API key') || error.includes('free-models-per-day') || error.includes('quota') || error.includes('rate-limited') || error.includes('settings')) ? '0.75rem' : 0
+                }}>
                   ⚠ {error}
                 </p>
+                {(error.includes('API key') || error.includes('free-models-per-day') || error.includes('quota') || error.includes('rate-limited') || error.includes('settings')) && (
+                  <button
+                    onClick={() => setShowApiModal(true)}
+                    style={{
+                      background: 'linear-gradient(135deg, #0f4c81, #028090)',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '8px',
+                      padding: '8px 18px',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      letterSpacing: '0.05em',
+                      boxShadow: '0 4px 12px rgba(2, 128, 144, 0.3)',
+                    }}
+                  >
+                    🔑 Configure API Key in Settings
+                  </button>
+                )}
               </div>
             </div>
           )}
