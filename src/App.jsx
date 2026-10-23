@@ -10,11 +10,10 @@ import ComparisonUploadZone from './components/ComparisonUploadZone';
 import ComparisonResultsSection from './components/ComparisonResultsSection';
 import HistoryPanel from './components/HistoryPanel';
 import Footer from './components/Footer';
-import ApiKeyModal from './components/ApiKeyModal';
 
-// Helper to get active OpenRouter API key (supports local storage override or .env)
+// Helper to get active OpenRouter API key
 function getActiveOpenRouterKey() {
-  return localStorage.getItem('clarivue_openrouter_api_key') || import.meta.env.VITE_OPENROUTER_API_KEY || '';
+  return import.meta.env.VITE_OPENROUTER_API_KEY || '';
 }
 
 // ─── Medical-grade image preprocessing ─────────────────────────────────────────
@@ -501,63 +500,19 @@ function trackModelUsage(model) {
 }
 
 // ─── Provider config ──────────────────────────────────────────────────────────
-// PRIMARY: newest, largest free vision model with 1M context window
-const PRIMARY_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
+// PRIMARY: Google Gemini 3.1 Flash Lite — fast, highly accurate clinical perception
+const PRIMARY_MODEL = 'google/gemini-3.1-flash-lite';
 
-// FALLBACK: explicit named free vision models verified live on OpenRouter,
-// followed by openrouter/free auto-router as the final catch-all.
+// FALLBACK: Gemma 3 27B IT, Nemotron 3.5 Super VL, Nemotron 3 Nano Omni, and auto-router
 const FALLBACK_MODELS = [
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', // Fallback 1: fast, confirmed working in production
-  'google/gemma-4-31b-it:free',                         // Fallback 2: high capacity 31B model
-  'google/gemma-4-26b-a4b-it:free',                     // Fallback 3: 26B efficient model
-  'openrouter/free',                                    // Final catch-all: auto-router across live free models
+  'google/gemma-3-27b-it',                              // Fallback 1: Google Gemma 3 27B vision model
+  'nvidia/nemotron-3.5-super-vl:free',                  // Fallback 2: Nvidia high-parameter vision model
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', // Fallback 3: Nvidia reasoning model
+  'openrouter/free',                                    // Fallback 4: Auto-router across live free models
 ];
 
 // Combined list for fallback chain: primary model first, then fallbacks in order
 const ALL_MODELS = [PRIMARY_MODEL, ...FALLBACK_MODELS];
-
-// ─── Startup health check — pings each model and logs status ─────────────────
-let healthCheckDone = false;
-async function runHealthCheck(orKey) {
-  if (healthCheckDone || !orKey) return;
-  healthCheckDone = true;
-  console.log('[ClarivueAI] ╔══════════════════════════════════════════════════');
-  console.log('[ClarivueAI] ║  STARTUP HEALTH CHECK — Pinging vision models...');
-  console.log('[ClarivueAI] ╚══════════════════════════════════════════════════');
-
-  for (const model of ALL_MODELS) {
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${orKey}`,
-          'HTTP-Referer': 'https://clarivue-ai.vercel.app',
-          'X-Title': 'ClarivueAI-HealthCheck',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: 'Reply with only the word ALIVE' }],
-          max_tokens: 15,
-        }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        const errMsg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
-        console.warn(`[ClarivueAI] ❌ ${model} — DOWN: ${errMsg}`);
-      } else if (data?.error) {
-        console.warn(`[ClarivueAI] ❌ ${model} — DOWN: ${data.error.message}`);
-      } else {
-        const actualModel = data?.model || model;
-        const text = (data?.choices?.[0]?.message?.content || data?.choices?.[0]?.message?.reasoning || '').trim();
-        console.log(`[ClarivueAI] ✅ ${model} — ALIVE (routed to: ${actualModel}, snippet: "${text.slice(0, 30)}")`);
-      }
-    } catch (err) {
-      console.warn(`[ClarivueAI] ❌ ${model} — NETWORK ERROR: ${err.message}`);
-    }
-  }
-  console.log('[ClarivueAI] ═══════════════════════════════════════════════════');
-}
 
 // ─── Core API call with retry-on-429 & dead-model fallback ───────────────────
 async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries = 2) {
@@ -597,7 +552,7 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
             },
           ],
           temperature: 0,
-          max_tokens: 4000,
+          max_tokens: 2500,
         }),
       });
     } catch (networkErr) {
@@ -612,17 +567,23 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
     if (!response.ok) {
       const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
       
-      // Check if account-wide daily free model limit was reached (free-models-per-day)
-      if (msg.includes('free-models-per-day') || (response.status === 429 && msg.toLowerCase().includes('free-models'))) {
-        console.warn(`[ClarivueAI] 🛑 OpenRouter account daily limit hit: ${msg}`);
-        throw Object.assign(new Error('OpenRouter daily free-tier limit exceeded (free-models-per-day). All free models on this API key are paused until the UTC midnight reset. Please configure a new API key in settings or add credits on openrouter.ai.'), {
-          isDailyQuotaExceeded: true,
+      // Distinguish account-wide daily quota exceeded vs model-specific failure
+      const isAccountDailyCap = 
+        msg.includes('free-models-per-day') ||
+        msg.toLowerCase().includes('quota exceeded') ||
+        msg.includes('RESOURCE_EXHAUSTED') ||
+        (response.status === 429 && msg.toLowerCase().includes('free-models'));
+
+      if (isAccountDailyCap) {
+        console.warn(`[ClarivueAI] 🛑 Account-wide daily quota exceeded (${msg}) — aborting fallback cascade.`);
+        throw Object.assign(new Error('High demand, please try again shortly.'), {
+          isAccountQuotaExceeded: true,
           skip: true,
           status: 429,
         });
       }
 
-      // If normal 429 rate limit (concurrency or temporary) and attempts remain, try backoff
+      // If temporary model rate limit (concurrency or RPM) and attempts remain, try backoff
       if (response.status === 429 && attempt < maxRetries) {
         console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), retrying...`);
         continue;
@@ -669,18 +630,18 @@ async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
       } catch (err) {
         lastError = err;
         console.warn(`[ClarivueAI] ❌ ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
-        // If the OpenRouter account hit free-models-per-day, all free models share this limit — fast fail immediately
-        if (err.isDailyQuotaExceeded) {
+        // If account-wide quota limit reached, abort immediately — do not loop pointlessly
+        if (err.isAccountQuotaExceeded) {
           throw err;
         }
         continue;
       }
     }
     console.error('[ClarivueAI] All fallback models exhausted. Last error:', lastError);
-    if (lastError?.isDailyQuotaExceeded) throw lastError;
+    if (lastError?.isAccountQuotaExceeded) throw lastError;
   }
 
-  throw new Error('All diagnostic AI models are currently rate-limited or unavailable. Please retry in a few moments or enter a new API key in settings.');
+  throw new Error('High demand, please try again shortly.');
 }
 
 // ─── Comparison Prompt ──────────────────────────────────────────────────────────
@@ -746,11 +707,17 @@ async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey
     if (!response.ok) {
       const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
       
-      // Check if account-wide daily free model limit was reached (free-models-per-day)
-      if (msg.includes('free-models-per-day') || (response.status === 429 && msg.toLowerCase().includes('free-models'))) {
-        console.warn(`[ClarivueAI] 🛑 OpenRouter comparison account daily limit hit: ${msg}`);
-        throw Object.assign(new Error('OpenRouter daily free-tier limit exceeded (free-models-per-day). All free models on this API key are paused until the UTC midnight reset. Please configure a new API key in settings or add credits on openrouter.ai.'), {
-          isDailyQuotaExceeded: true,
+      // Distinguish account-wide daily quota exceeded vs model-specific failure
+      const isAccountDailyCap = 
+        msg.includes('free-models-per-day') ||
+        msg.toLowerCase().includes('quota exceeded') ||
+        msg.includes('RESOURCE_EXHAUSTED') ||
+        (response.status === 429 && msg.toLowerCase().includes('free-models'));
+
+      if (isAccountDailyCap) {
+        console.warn(`[ClarivueAI] 🛑 Comparison account-wide daily quota exceeded (${msg}) — aborting fallback cascade.`);
+        throw Object.assign(new Error('High demand, please try again shortly.'), {
+          isAccountQuotaExceeded: true,
           skip: true,
           status: 429,
         });
@@ -798,16 +765,16 @@ async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey
       } catch (err) {
         lastError = err;
         console.warn(`[ClarivueAI] ❌ Comparison ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
-        if (err.isDailyQuotaExceeded) {
+        if (err.isAccountQuotaExceeded) {
           throw err;
         }
         continue;
       }
     }
     console.error('[ClarivueAI] All comparison fallback models exhausted. Last error:', lastError);
-    if (lastError?.isDailyQuotaExceeded) throw lastError;
+    if (lastError?.isAccountQuotaExceeded) throw lastError;
   }
-  throw new Error('All diagnostic providers are currently unavailable or rate-limited. Please retry in a few moments or enter a new API key in settings.');
+  throw new Error('High demand, please try again shortly.');
 }
 
 // ─── History helpers ────────────────────────────────────────────────────────────
@@ -844,7 +811,6 @@ function App() {
 
   // ── Modals & Drawers ──
   const [showHistory, setShowHistory] = useState(false);
-  const [showApiModal, setShowApiModal] = useState(false);
 
   // ── Feature 1: Comparison Mode ──
   const [compareMode, setCompareMode] = useState(false);
@@ -888,7 +854,7 @@ function App() {
     try {
       const groqKey = import.meta.env.VITE_GROQ_API_KEY;
       const orKey = getActiveOpenRouterKey();
-      if (!groqKey && !orKey) throw new Error('No API key configured. Click "API Key" in the header to set your OpenRouter key.');
+      if (!groqKey && !orKey) throw new Error('High demand, please try again shortly.');
 
       // 1. Call local classifier (runs fast and fails silently if offline)
       console.log('[ClarivueAI] Querying local AMD GPU classifier...');
@@ -935,7 +901,7 @@ function App() {
     try {
       const groqKey = import.meta.env.VITE_GROQ_API_KEY;
       const orKey = getActiveOpenRouterKey();
-      if (!groqKey && !orKey) throw new Error('No API key configured. Click "API Key" in the header to set your OpenRouter key.');
+      if (!groqKey && !orKey) throw new Error('High demand, please try again shortly.');
 
       const img1 = await compressImage(file);
       const img2 = await compressImage(file2);
@@ -1026,13 +992,6 @@ function App() {
         <Header
           showHistory={showHistory}
           onToggleHistory={() => setShowHistory(h => !h)}
-          onOpenApiKey={() => setShowApiModal(true)}
-        />
-
-        <ApiKeyModal
-          isOpen={showApiModal}
-          onClose={() => setShowApiModal(false)}
-          onKeySaved={() => setError(null)}
         />
 
         <main style={{ flex: 1, width: '100%' }}>
@@ -1050,30 +1009,10 @@ function App() {
                   fontFamily: 'var(--font-mono)',
                   fontSize: '0.85rem',
                   lineHeight: 1.5,
-                  marginBottom: (error.includes('API key') || error.includes('free-models-per-day') || error.includes('quota') || error.includes('rate-limited') || error.includes('settings')) ? '0.75rem' : 0
+                  margin: 0,
                 }}>
                   ⚠ {error}
                 </p>
-                {(error.includes('API key') || error.includes('free-models-per-day') || error.includes('quota') || error.includes('rate-limited') || error.includes('settings')) && (
-                  <button
-                    onClick={() => setShowApiModal(true)}
-                    style={{
-                      background: 'linear-gradient(135deg, #0f4c81, #028090)',
-                      color: '#ffffff',
-                      border: 'none',
-                      borderRadius: '8px',
-                      padding: '8px 18px',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      letterSpacing: '0.05em',
-                      boxShadow: '0 4px 12px rgba(2, 128, 144, 0.3)',
-                    }}
-                  >
-                    🔑 Configure API Key in Settings
-                  </button>
-                )}
               </div>
             </div>
           )}
