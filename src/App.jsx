@@ -84,7 +84,30 @@ Return ONLY a valid JSON object — no markdown, no backticks, no extra text:
   "disclaimer": "AI-assisted analysis for educational purposes only. Consult a licensed physician."
 }`;
 
-const SKIP_PHRASES = ['not found', 'not a valid', 'no endpoints', 'provider returned error', 'provider error', 'rate limit', 'quota', 'temporarily rate-limited', 'upstream', 'agentic harness'];
+const SKIP_PHRASES = [
+  'unavailable for free',
+  'paid version',
+  'use this slug instead',
+  'model is unavailable',
+  'not found',
+  'not a valid',
+  'no endpoints',
+  'provider returned error',
+  'provider error',
+  'rate limit',
+  'rate-limited',
+  'quota',
+  'temporarily rate-limited',
+  'upstream',
+  'agentic harness',
+  'payment required',
+  'disabled',
+  'model_not_found',
+  'does not exist',
+  'credit balance',
+  'insufficient',
+  'upstream_provider_shared_pool',
+];
 
 const CT_SCAN_PROMPT = `You are a highly specialized radiologist AI with expert knowledge in CT scan interpretation. Trained on large scale CT imaging datasets covering neurological, thoracic, abdominal, and musculoskeletal CT scans.
 
@@ -393,18 +416,39 @@ async function callLocalClassifier(file, scanType) {
   }
 }
 
-// ─── Helper: extract text from response (handles reasoning-only models) ────────
+// ─── Helper: extract text from response (handles reasoning-only models & body error checks) ────────
 function extractResponseText(data) {
-  const msg = data.choices?.[0]?.message;
+  if (data?.error) {
+    const errMsg = data.error.message || 'Model error in response body';
+    throw Object.assign(new Error(errMsg), { skip: true });
+  }
+  const msg = data?.choices?.[0]?.message;
   if (!msg) return null;
   // Prefer content field, fall back to reasoning field (for thinking models)
-  if (msg.content && msg.content.trim()) return msg.content;
-  if (msg.reasoning && msg.reasoning.trim()) return msg.reasoning;
-  if (msg.reasoning_details && msg.reasoning_details.length > 0) {
+  let text = null;
+  if (msg.content && msg.content.trim()) text = msg.content;
+  else if (msg.reasoning && msg.reasoning.trim()) text = msg.reasoning;
+  else if (msg.reasoning_details && msg.reasoning_details.length > 0) {
     const combined = msg.reasoning_details.map(r => r.text || '').join('\n');
-    if (combined.trim()) return combined;
+    if (combined.trim()) text = combined;
   }
-  return null;
+
+  if (text) {
+    const lower = text.toLowerCase();
+    // Catch "unavailable for free" or "paid version" inside 200 response body text
+    if (
+      lower.includes('unavailable for free') ||
+      lower.includes('paid version is available') ||
+      lower.includes('paid version available') ||
+      lower.includes('use this slug instead')
+    ) {
+      throw Object.assign(
+        new Error(`Model unavailable for free: ${text.trim().slice(0, 120)}`),
+        { skip: true }
+      );
+    }
+  }
+  return text;
 }
 
 // ─── Helper: parse JSON from AI text (handles markdown wrapping) ───────────────
@@ -431,20 +475,39 @@ function parseJsonFromText(text) {
 // ─── Helper: sleep for retry backoff ───────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// ─── Provider config ──────────────────────────────────────────────────────────
-// PRIMARY: openrouter/free auto-router — automatically selects whichever free
-// vision-capable model is currently live. Future-proof against model deprecation.
-const PRIMARY_MODEL = 'openrouter/free';
+// ─── Rate limit tracking: daily request counter per model ─────────────────────
+function trackModelUsage(model) {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const storageKey = `clarivue_daily_reqs_${today}`;
+    const data = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    data[model] = (data[model] || 0) + 1;
+    localStorage.setItem(storageKey, JSON.stringify(data));
+    const count = data[model];
+    console.log(`[ClarivueAI] 📊 Daily request count for ${model}: ${count} (Est limit: 50-200/day)`);
+    if (count >= 40) {
+      console.warn(`[ClarivueAI] ⚠ ${model} is approaching daily free tier limit (${count} requests today).`);
+    }
+    return count;
+  } catch (e) {
+    return 0;
+  }
+}
 
-// FALLBACK: explicit named free vision models, verified working Sept 2026.
-// These are tried in order if the auto-router fails.
+// ─── Provider config ──────────────────────────────────────────────────────────
+// PRIMARY: newest, largest free vision model with 1M context window
+const PRIMARY_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
+
+// FALLBACK: explicit named free vision models verified live on OpenRouter,
+// followed by openrouter/free auto-router as the final catch-all.
 const FALLBACK_MODELS = [
-  'inclusionai/ling-3.0-flash-vl:free',                  // Strong vision, reasoning model
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',  // Nvidia omni vision+reasoning
-  'google/gemma-4-26b-a4b-it:free',                      // Google, sometimes rate-limited
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', // Fallback 1: fast, confirmed working in production
+  'google/gemma-4-31b-it:free',                         // Fallback 2: high capacity 31B model
+  'google/gemma-4-26b-a4b-it:free',                     // Fallback 3: 26B efficient model
+  'openrouter/free',                                    // Final catch-all: auto-router across live free models
 ];
 
-// Combined list for fallback chain: auto-router first, then explicit models
+// Combined list for fallback chain: primary model first, then fallbacks in order
 const ALL_MODELS = [PRIMARY_MODEL, ...FALLBACK_MODELS];
 
 // ─── Startup health check — pings each model and logs status ─────────────────
@@ -469,17 +532,19 @@ async function runHealthCheck(orKey) {
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: 'Reply with only the word ALIVE' }],
-          max_tokens: 5,
+          max_tokens: 15,
         }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
       if (!response.ok) {
-        const errMsg = data?.error?.message || `HTTP ${response.status}`;
+        const errMsg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
         console.warn(`[ClarivueAI] ❌ ${model} — DOWN: ${errMsg}`);
+      } else if (data?.error) {
+        console.warn(`[ClarivueAI] ❌ ${model} — DOWN: ${data.error.message}`);
       } else {
-        const actualModel = data.model || model;
-        const text = data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning || '';
-        console.log(`[ClarivueAI] ✅ ${model} — ALIVE (routed to: ${actualModel}, response: "${text.trim().slice(0, 30)}"`);
+        const actualModel = data?.model || model;
+        const text = (data?.choices?.[0]?.message?.content || data?.choices?.[0]?.message?.reasoning || '').trim();
+        console.log(`[ClarivueAI] ✅ ${model} — ALIVE (routed to: ${actualModel}, snippet: "${text.slice(0, 30)}")`);
       }
     } catch (err) {
       console.warn(`[ClarivueAI] ❌ ${model} — NETWORK ERROR: ${err.message}`);
@@ -488,11 +553,13 @@ async function runHealthCheck(orKey) {
   console.log('[ClarivueAI] ═══════════════════════════════════════════════════');
 }
 
-// ─── Core API call with retry-on-429 ──────────────────────────────────────────
+// ─── Core API call with retry-on-429 & dead-model fallback ───────────────────
 async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries = 2) {
   const systemContent = prompt === ECG_PROMPT
     ? 'You are a senior cardiologist providing clinical-grade ECG/EKG interpretation reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.'
     : 'You are a senior radiologist providing clinical-grade diagnostic reports. Be precise, systematic, and never fabricate findings. If unsure, state uncertainty explicitly. Always use standard medical terminology.';
+
+  trackModelUsage(model);
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
@@ -501,52 +568,70 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
       await sleep(backoff);
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${orKey}`,
-        'HTTP-Referer': 'https://clarivue-ai.vercel.app',
-        'X-Title': 'ClarivueAI',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemContent },
-          {
-            role: 'user',
-            content: [
-              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
-              { type: 'text', text: prompt },
-            ],
-          },
-        ],
-        temperature: 0,
-        max_tokens: 4000,
-      }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      const msg = data?.error?.message || `HTTP ${response.status}`;
-      if (response.status === 429 && attempt < maxRetries) {
-        console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), will retry...`);
-        continue;
-      }
-      if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
-        throw Object.assign(new Error(msg), { skip: true });
-      throw new Error(msg);
+    let response;
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${orKey}`,
+          'HTTP-Referer': 'https://clarivue-ai.vercel.app',
+          'X-Title': 'ClarivueAI',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemContent },
+            {
+              role: 'user',
+              content: [
+                { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+                { type: 'text', text: prompt },
+              ],
+            },
+          ],
+          temperature: 0,
+          max_tokens: 4000,
+        }),
+      });
+    } catch (networkErr) {
+      console.warn(`[ClarivueAI] Network error on ${model}:`, networkErr.message);
+      if (attempt < maxRetries) continue;
+      throw Object.assign(new Error(`Network error calling ${model}: ${networkErr.message}`), { skip: true });
     }
 
-    // Log which model the auto-router actually used
-    if (model === PRIMARY_MODEL && data.model) {
+    const data = await response.json().catch(() => null);
+
+    // 1. Handle HTTP error status (404, 429, 402, 403, 500, 503, etc.)
+    if (!response.ok) {
+      const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
+      
+      // If 429 rate limit and attempts remain, try backoff
+      if (response.status === 429 && attempt < maxRetries) {
+        console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), retrying...`);
+        continue;
+      }
+      
+      console.warn(`[ClarivueAI] ❌ ${model} HTTP ${response.status} (${msg}) — triggering fallback`);
+      throw Object.assign(new Error(msg), { skip: true, status: response.status });
+    }
+
+    // 2. Handle 200 OK with error body
+    if (data?.error) {
+      const msg = data.error.message || 'Model error in response body';
+      console.warn(`[ClarivueAI] ❌ ${model} returned 200 error body (${msg}) — triggering fallback`);
+      throw Object.assign(new Error(msg), { skip: true });
+    }
+
+    // Log which model the auto-router actually used if auto-router was invoked
+    if (model === 'openrouter/free' && data?.model) {
       console.log(`[ClarivueAI] 🔀 Auto-router selected: ${data.model}`);
     }
 
     const text = extractResponseText(data);
     if (!text) {
       if (attempt < maxRetries) continue;
-      throw Object.assign(new Error('Empty response'), { skip: true });
+      throw Object.assign(new Error(`Empty response from ${model}`), { skip: true });
     }
 
     return parseJsonFromText(text);
@@ -555,24 +640,27 @@ async function callOpenRouter(model, base64, mimeType, orKey, prompt, maxRetries
   throw Object.assign(new Error(`${model} failed after retries`), { skip: true });
 }
 
-// ─── Master analysis: auto-router first, then explicit fallbacks ───────────────
+// ─── Master analysis: primary model first, then seamless fallbacks ────────────
 async function analyzeWithFallback(base64, mimeType, groqKey, orKey, prompt) {
   if (orKey) {
+    let lastError = null;
     for (const model of ALL_MODELS) {
       try {
-        console.log(`[ClarivueAI] Trying: ${model}${model === PRIMARY_MODEL ? ' (auto-router)' : ''}...`);
+        console.log(`[ClarivueAI] Trying model: ${model}${model === PRIMARY_MODEL ? ' (primary)' : ''}...`);
         const result = await callOpenRouter(model, base64, mimeType, orKey, prompt);
-        console.log(`[ClarivueAI] ✅ Success via: ${model}`);
+        console.log(`[ClarivueAI] ✅ Diagnostic report generated successfully via: ${model}`);
         return result;
       } catch (err) {
-        console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
-        if (err.skip) continue;
-        throw err;
+        lastError = err;
+        console.warn(`[ClarivueAI] ❌ ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
+        // Silently advance to the next model in the chain
+        continue;
       }
     }
+    console.error('[ClarivueAI] All fallback models exhausted. Last error:', lastError);
   }
 
-  throw new Error('All providers failed. Please try again in a few seconds — free models may be temporarily rate-limited.');
+  throw new Error('All diagnostic AI models are currently rate-limited or unavailable. Please retry in a few moments.');
 }
 
 // ─── Comparison Prompt ──────────────────────────────────────────────────────────
@@ -594,6 +682,8 @@ const COMPARISON_PROMPT = `You are an expert radiologist AI. You are given two m
 
 // ─── Comparison API calls (two images in one request) ──────────────────────────
 async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey, maxRetries = 2) {
+  trackModelUsage(model);
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       const backoff = 2000 * attempt;
@@ -601,62 +691,88 @@ async function callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey
       await sleep(backoff);
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${orKey}`, 'HTTP-Referer': 'https://clarivue-ai.vercel.app', 'X-Title': 'ClarivueAI' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
-          { role: 'user', content: [
-            { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
-            { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
-            { type: 'text', text: COMPARISON_PROMPT },
-          ]},
-        ],
-        temperature: 0, max_tokens: 4000,
-      }),
-    });
-    const data = await response.json();
+    let response;
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${orKey}`,
+          'HTTP-Referer': 'https://clarivue-ai.vercel.app',
+          'X-Title': 'ClarivueAI',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: 'You are a senior radiologist providing clinical-grade diagnostic comparison reports. Be precise, systematic, and never fabricate findings.' },
+            { role: 'user', content: [
+              { type: 'image_url', image_url: { url: `data:${mime1};base64,${b64_1}` } },
+              { type: 'image_url', image_url: { url: `data:${mime2};base64,${b64_2}` } },
+              { type: 'text', text: COMPARISON_PROMPT },
+            ]},
+          ],
+          temperature: 0,
+          max_tokens: 4000,
+        }),
+      });
+    } catch (networkErr) {
+      console.warn(`[ClarivueAI] Comparison network error on ${model}:`, networkErr.message);
+      if (attempt < maxRetries) continue;
+      throw Object.assign(new Error(`Comparison network error: ${networkErr.message}`), { skip: true });
+    }
+
+    const data = await response.json().catch(() => null);
+
     if (!response.ok) {
-      const msg = data?.error?.message || `HTTP ${response.status}`;
+      const msg = data?.error?.message || data?.error?.metadata?.raw || `HTTP ${response.status}`;
       if (response.status === 429 && attempt < maxRetries) {
-        console.warn(`[ClarivueAI] ⏳ ${model} rate-limited (429), will retry...`);
+        console.warn(`[ClarivueAI] ⏳ Comparison ${model} rate-limited (429), retrying...`);
         continue;
       }
-      if (SKIP_PHRASES.some(p => msg.toLowerCase().includes(p.toLowerCase())))
-        throw Object.assign(new Error(msg), { skip: true });
-      throw new Error(msg);
+      console.warn(`[ClarivueAI] ❌ Comparison ${model} HTTP ${response.status} (${msg}) — triggering fallback`);
+      throw Object.assign(new Error(msg), { skip: true, status: response.status });
     }
-    if (model === PRIMARY_MODEL && data.model) {
+
+    if (data?.error) {
+      const msg = data.error.message || 'Comparison error in response body';
+      console.warn(`[ClarivueAI] ❌ Comparison ${model} returned 200 error body (${msg}) — triggering fallback`);
+      throw Object.assign(new Error(msg), { skip: true });
+    }
+
+    if (model === 'openrouter/free' && data?.model) {
       console.log(`[ClarivueAI] 🔀 Comparison auto-router selected: ${data.model}`);
     }
+
     const text = extractResponseText(data);
     if (!text) {
       if (attempt < maxRetries) continue;
-      throw Object.assign(new Error('Empty response'), { skip: true });
+      throw Object.assign(new Error(`Empty comparison response from ${model}`), { skip: true });
     }
+
     return parseJsonFromText(text);
   }
+
   throw Object.assign(new Error(`${model} comparison failed after retries`), { skip: true });
 }
 
 async function analyzeComparisonWithFallback(b64_1, mime1, b64_2, mime2, groqKey, orKey) {
   if (orKey) {
+    let lastError = null;
     for (const model of ALL_MODELS) {
       try {
-        console.log(`[ClarivueAI] Comparison: Trying ${model}${model === PRIMARY_MODEL ? ' (auto-router)' : ''}...`);
+        console.log(`[ClarivueAI] Comparison: Trying model: ${model}${model === PRIMARY_MODEL ? ' (primary)' : ''}...`);
         const result = await callOpenRouterComparison(model, b64_1, mime1, b64_2, mime2, orKey);
-        console.log(`[ClarivueAI] ✅ Comparison success via: ${model}`);
+        console.log(`[ClarivueAI] ✅ Comparison report generated successfully via: ${model}`);
         return result;
       } catch (err) {
-        console.warn(`[ClarivueAI] ❌ ${model}:`, err.message);
-        if (err.skip) continue;
-        throw err;
+        lastError = err;
+        console.warn(`[ClarivueAI] ❌ Comparison ${model} failed (${err.message}). Seamlessly engaging next fallback model...`);
+        continue;
       }
     }
+    console.error('[ClarivueAI] All comparison fallback models exhausted. Last error:', lastError);
   }
-  throw new Error('All providers failed. Please try again in a few seconds — free models may be temporarily rate-limited.');
+  throw new Error('All diagnostic providers are currently unavailable or rate-limited. Please retry in a few moments.');
 }
 
 // ─── History helpers ────────────────────────────────────────────────────────────
